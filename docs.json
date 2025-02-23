@@ -11,11 +11,45 @@
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Tutorials",
         "groups": [
           {
-            "group": "Get Started",
-            "pages": ["introduction", "quickstart", "development"]
+            "group": "Go Basics",
+            "pages": [
+              "go-basics/hello-go",
+              "go-basics/functions",
+              "go-basics/packages",
+              "go-basics/flow-control",
+              "go-basics/testing",
+              "go-basics/advanced-types",
+              "go-basics/methods"
+            ]
+          },
+          {
+            "group": "Go Concurrency",
+            "pages": [
+              "go-concurrency/goroutines",
+              "go-concurrency/channels",
+              "go-concurrency/flow"
+            ]
+          },
+          {
+            "group": "Go APIs with Gin",
+            "pages": [
+              "go-apis/hello-gin",
+              "go-apis/rest",
+              "go-apis/errors",
+              "go-apis/middleware",
+              "go-apis/signals"
+            ]
+          },
+          {
+            "group": "Writing Kubernetes Operators",
+            "pages": ["k8s-operators/operator-101"]
+          },
+          {
+            "group": "Crossplane",
+            "pages": ["crossplane/basics"]
           },
           {
             "group": "Essentials",
