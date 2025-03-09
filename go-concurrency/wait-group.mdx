@@ -1,0 +1,239 @@
+---
+title: Wait Groups
+---
+
+In the previous chapter, we introduced goroutines as Go's way of handling concurrent execution. However, we encountered a problem: the main function might finish before our goroutines complete their work. We need a way to wait for all goroutines to finish before the program exits.
+
+## The Problem with Basic Goroutines
+
+Let's remind ourselves of the issue:
+
+```go
+package main
+
+import (
+	"fmt"
+	"time"
+)
+
+func worker(id int) {
+	fmt.Printf("Worker %d starting\n", id)
+	time.Sleep(time.Second) // Simulate work
+	fmt.Printf("Worker %d done\n", id)
+}
+
+func main() {
+	for i := 1; i <= 3; i++ {
+		go worker(i)
+	}
+	
+	// The program might exit before workers finish
+	fmt.Println("All workers started")
+}
+```
+
+If you run this program, you might not see all the "Worker done" messages because the main function exits before the goroutines complete.
+
+## Enter sync.WaitGroup
+
+The `sync.WaitGroup` type provides a simple yet powerful way to wait for a collection of goroutines to finish. A WaitGroup maintains a counter that tracks active goroutines. When you start a goroutine, increment the counter. When a goroutine completes, decrement the counter. The main function can wait until the counter reaches zero.
+
+Here's how to use it:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+func worker(id int, wg *sync.WaitGroup) {
+	// Decrement counter when the function completes
+	defer wg.Done()
+	
+	fmt.Printf("Worker %d starting\n", id)
+	time.Sleep(time.Second) // Simulate work
+	fmt.Printf("Worker %d done\n", id)
+}
+
+func main() {
+	var wg sync.WaitGroup
+	
+	for i := 1; i <= 3; i++ {
+		// Increment counter for each goroutine
+		wg.Add(1)
+		go worker(i, &wg)
+	}
+	
+	// Wait for all goroutines to finish
+	wg.Wait()
+	
+	fmt.Println("All workers completed")
+}
+```
+
+## How WaitGroup Works
+
+The `sync.WaitGroup` has three main methods:
+
+1. `Add(delta int)` - Increases the counter by the specified value
+2. `Done()` - Decreases the counter by 1 (equivalent to `Add(-1)`)
+3. `Wait()` - Blocks until the counter becomes zero
+
+A typical pattern is:
+- Create a WaitGroup in the parent function
+- Call `Add(1)` before starting each goroutine
+- Pass the WaitGroup to each goroutine (by pointer)
+- Have each goroutine call `Done()` when it finishes
+- Call `Wait()` in the parent function to block until all goroutines complete
+
+## Best Practices
+
+### Use defer
+
+Using `defer wg.Done()` at the beginning of your goroutine function ensures that the counter is decremented even if the function panics or returns early:
+
+```go
+func worker(id int, wg *sync.WaitGroup) {
+	defer wg.Done()
+	// rest of the function
+}
+```
+
+### Add before starting goroutines
+
+Always call `wg.Add()` before launching the goroutine, not inside it:
+
+```go
+// Good
+wg.Add(1)
+go worker(i, &wg)
+
+// Bad - can lead to race conditions
+go func() {
+	wg.Add(1)
+	worker(i, &wg)
+}()
+```
+
+### Pass WaitGroup by pointer
+
+A WaitGroup must be passed by pointer to ensure all goroutines are operating on the same counter:
+
+```go
+go worker(i, &wg) // Not wg
+```
+
+## Practical Example: Parallel File Processing
+
+Let's create a program that processes multiple files in parallel:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+// processFile simulates processing a file
+func processFile(filename string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	
+	fmt.Printf("Processing file: %s\n", filename)
+	// Simulate different processing times
+	processingTime := time.Duration(len(filename) * 100) * time.Millisecond
+	time.Sleep(processingTime)
+	fmt.Printf("Finished processing: %s\n", filename)
+}
+
+func main() {
+	files := []string{
+		"document1.txt",
+		"image.jpg",
+		"spreadsheet.xlsx",
+		"presentation.pptx",
+	}
+	
+	var wg sync.WaitGroup
+	
+	fmt.Println("Starting parallel file processing...")
+	startTime := time.Now()
+	
+	for _, file := range files {
+		wg.Add(1)
+		go processFile(file, &wg)
+	}
+	
+	// Wait for all files to be processed
+	wg.Wait()
+	
+	elapsed := time.Since(startTime)
+	fmt.Printf("All files processed in %s\n", elapsed)
+}
+```
+
+This example demonstrates how WaitGroups allow us to process multiple items concurrently while still waiting for all operations to complete.
+
+## Complete Working Example
+
+Here's the complete, compilable code example for this chapter:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+// processFile simulates processing a file
+func processFile(filename string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	
+	fmt.Printf("Processing file: %s\n", filename)
+	// Simulate different processing times
+	processingTime := time.Duration(len(filename) * 100) * time.Millisecond
+	time.Sleep(processingTime)
+	fmt.Printf("Finished processing: %s\n", filename)
+}
+
+func main() {
+	files := []string{
+		"document1.txt",
+		"image.jpg",
+		"spreadsheet.xlsx",
+		"presentation.pptx",
+	}
+	
+	var wg sync.WaitGroup
+	
+	fmt.Println("Starting parallel file processing...")
+	startTime := time.Now()
+	
+	for _, file := range files {
+		wg.Add(1)
+		go processFile(file, &wg)
+	}
+	
+	// Wait for all files to be processed
+	wg.Wait()
+	
+	elapsed := time.Since(startTime)
+	fmt.Printf("All files processed in %s\n", elapsed)
+}
+```
+
+## Summary
+
+- `sync.WaitGroup` provides a mechanism to wait for multiple goroutines to complete
+- Use `Add()` to increment the counter, `Done()` to decrement it, and `Wait()` to block until the counter reaches zero
+- Always call `Add()` before starting the goroutine
+- Use `defer wg.Done()` to ensure the counter is decremented even if the goroutine exits unexpectedly
+- Pass WaitGroups by pointer to ensure all goroutines reference the same counter
+
+In the next chapter, we'll look at another synchronization primitive from the sync package: Mutexes, which help us safely access shared resources from multiple goroutines.

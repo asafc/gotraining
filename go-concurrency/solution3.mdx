@@ -1,0 +1,343 @@
+---
+title: "Exercise 3: Solution"
+---
+
+Here's a complete solution to the exercise:
+
+### Rate Limiter Program
+
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+	"math/rand"
+	"net/http"
+	"sync"
+	"time"
+	"flag"
+	"sync/atomic"
+)
+
+// RateLimiter controls the rate of requests using the token bucket algorithm
+// The token bucket algorithm works by:
+// 1. Having a bucket that holds tokens (up to a maximum capacity)
+// 2. Adding tokens to the bucket at a fixed rate
+// 3. Taking a token from the bucket for each request
+// 4. Rejecting requests when no tokens are available
+type RateLimiter struct {
+	rate       int           // Maximum requests per second
+	tokens     int           // Current available tokens
+	maxTokens  int           // Maximum tokens (for burst capacity)
+	ticker     *time.Ticker  // Ticker for token replenishment
+	mu         sync.Mutex    // Mutex for thread safety
+	done       chan struct{} // Signal to stop the token replenishment
+}
+
+// NewRateLimiter creates a new rate limiter with specified requests per second
+func NewRateLimiter(rps int, burstCapacity int) *RateLimiter {
+	// If burst capacity is not specified, use the rate as default
+	if burstCapacity <= 0 {
+		burstCapacity = rps
+	}
+	
+	// Initialize the rate limiter with full token capacity
+	rl := &RateLimiter{
+		rate:      rps,
+		tokens:    burstCapacity, // Start with full capacity to allow initial bursts
+		maxTokens: burstCapacity,
+		// Create a ticker that "ticks" at a frequency of rps times per second
+		// This means tokens are replenished at the rate of rps per second
+		ticker:    time.NewTicker(time.Second / time.Duration(rps)),
+		done:      make(chan struct{}),
+	}
+	
+	// Start token replenishment in a separate goroutine to run concurrently
+	go rl.replenishTokens()
+	
+	return rl
+}
+
+// replenishTokens adds tokens at the specified rate
+// This runs as a goroutine and continuously adds tokens until stopped
+func (rl *RateLimiter) replenishTokens() {
+	for {
+		select {
+		case <-rl.ticker.C:
+			// Lock the mutex to safely update token count
+			rl.mu.Lock()
+			// Only add a token if we haven't reached max capacity
+			if rl.tokens < rl.maxTokens {
+				rl.tokens++
+			}
+			rl.mu.Unlock()
+		case <-rl.done:
+			// Clean up when done signal is received
+			rl.ticker.Stop()
+			return
+		}
+	}
+}
+
+// Allow checks if a request can proceed by attempting to consume a token
+// Returns true if the request is allowed, false if rate limit is exceeded
+func (rl *RateLimiter) Allow() bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	
+	// If we have tokens available, consume one and allow the request
+	if rl.tokens > 0 {
+		rl.tokens--
+		return true
+	}
+	// No tokens available, reject the request
+	return false
+}
+
+// GetCurrentTokens returns the current number of available tokens (for monitoring)
+func (rl *RateLimiter) GetCurrentTokens() int {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	return rl.tokens
+}
+
+// Stop stops the rate limiter and cleans up resources
+func (rl *RateLimiter) Stop() {
+	close(rl.done)
+}
+
+// APIServer simulates an API server with rate limiting
+type APIServer struct {
+	limiter *RateLimiter
+	// Statistics for monitoring
+	totalRequests      uint64
+	acceptedRequests   uint64
+	rejectedRequests   uint64
+}
+
+// ServeHTTP handles HTTP requests with rate limiting
+func (s *APIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Increment total request counter
+	atomic.AddUint64(&s.totalRequests, 1)
+	
+	// Try to acquire a token from the rate limiter
+	if s.limiter.Allow() {
+		// Token acquired, request is allowed
+		atomic.AddUint64(&s.acceptedRequests, 1)
+		
+		// Simulate processing time (varying between 50-250ms)
+		processingTime := 50 + rand.Intn(200)
+		time.Sleep(time.Duration(processingTime) * time.Millisecond)
+		
+		// Send success response
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "Request processed successfully at %v\n", time.Now().Format(time.RFC3339))
+		log.Printf("Processed request: %s %s", r.Method, r.URL.Path)
+	} else {
+		// No token available, rate limit exceeded
+		atomic.AddUint64(&s.rejectedRequests, 1)
+		
+		// Send rate limit exceeded response
+		w.WriteHeader(http.StatusTooManyRequests) // HTTP 429 Too Many Requests
+		fmt.Fprintln(w, "Rate limit exceeded. Please try again later.")
+		log.Printf("Rate limited request: %s %s", r.Method, r.URL.Path)
+	}
+}
+
+// StatsHandler returns current statistics about the rate limiter
+func (s *APIServer) StatsHandler(w http.ResponseWriter, r *http.Request) {
+	total := atomic.LoadUint64(&s.totalRequests)
+	accepted := atomic.LoadUint64(&s.acceptedRequests)
+	rejected := atomic.LoadUint64(&s.rejectedRequests)
+	currentTokens := s.limiter.GetCurrentTokens()
+	
+	fmt.Fprintf(w, "Rate Limiter Statistics:\n")
+	fmt.Fprintf(w, "- Total Requests: %d\n", total)
+	fmt.Fprintf(w, "- Accepted Requests: %d (%.1f%%)\n", accepted, float64(accepted)/float64(total)*100)
+	fmt.Fprintf(w, "- Rejected Requests: %d (%.1f%%)\n", rejected, float64(rejected)/float64(total)*100)
+	fmt.Fprintf(w, "- Current Available Tokens: %d\n", currentTokens)
+}
+
+func main() {
+	// Parse command line flags
+	ratePtr := flag.Int("rate", 10, "Maximum requests per second")
+	burstPtr := flag.Int("burst", 15, "Burst capacity (max tokens)")
+	modePtr := flag.String("mode", "server", "Mode: 'server' or 'test'")
+	stressRpsPtr := flag.Int("stress", 0, "Stress test with specified requests per second")
+	durationPtr := flag.Int("duration", 10, "Duration of stress test in seconds")
+	flag.Parse()
+	
+	// Create a rate limiter with specified parameters
+	limiter := NewRateLimiter(*ratePtr, *burstPtr)
+	defer limiter.Stop()
+	
+	if *modePtr == "test" {
+		// Run the simple test demonstration
+		testRateLimiter(limiter)
+	} else if *stressRpsPtr > 0 {
+		// Run stress test if stress flag is provided
+		stressTest("http://localhost:8080/api/test", *stressRpsPtr, *durationPtr)
+	} else {
+		// Create API server with rate limiting
+		server := &APIServer{limiter: limiter}
+		
+		// Register handlers
+		http.Handle("/api/", server)
+		http.HandleFunc("/stats", server.StatsHandler)
+		
+		// Start server
+		fmt.Printf("Server starting on :8080...\n")
+		fmt.Printf("Rate limit: %d requests per second with burst capacity of %d\n", *ratePtr, *burstPtr)
+		fmt.Println("Endpoints:")
+		fmt.Println("- /api/*    - Rate limited API")
+		fmt.Println("- /stats    - Show statistics")
+		fmt.Println("\nRun stress test with:")
+		fmt.Printf("curl -s http://localhost:8080/stats  # View current stats\n")
+		fmt.Printf("go run main.go -mode=client -stress=20 -duration=5  # Run stress test at 20 RPS for 5 seconds\n")
+		
+		log.Fatal(http.ListenAndServe(":8080", nil))
+	}
+}
+
+// testRateLimiter is a simple demonstration of the rate limiter in action
+func testRateLimiter(limiter *RateLimiter) {
+	fmt.Println("=== Rate Limiter Test ===")
+	fmt.Printf("Rate: %d requests per second, Burst capacity: %d\n\n", limiter.rate, limiter.maxTokens)
+	
+	// Simulate 20 rapid requests
+	for i := 1; i <= 20; i++ {
+		if limiter.Allow() {
+			fmt.Printf("Request %d: Allowed (%d tokens remaining)\n", i, limiter.GetCurrentTokens())
+		} else {
+			fmt.Printf("Request %d: Rate limit exceeded (0 tokens available)\n", i)
+		}
+		
+		// Small delay between requests (50ms)
+		time.Sleep(50 * time.Millisecond)
+	}
+	
+	// Wait and try again to show token replenishment
+	fmt.Println("\nWaiting for token replenishment...")
+	time.Sleep(2 * time.Second)
+	
+	// Try 5 more requests
+	for i := 21; i <= 25; i++ {
+		if limiter.Allow() {
+			fmt.Printf("Request %d: Allowed (%d tokens remaining)\n", i, limiter.GetCurrentTokens())
+		} else {
+			fmt.Printf("Request %d: Rate limit exceeded (0 tokens available)\n", i)
+		}
+		
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// stressTest performs a stress test by making HTTP requests at a specified rate
+func stressTest(url string, requestsPerSecond int, durationSeconds int) {
+	fmt.Printf("=== Stress Test ===\n")
+	fmt.Printf("URL: %s\n", url)
+	fmt.Printf("Rate: %d requests per second\n", requestsPerSecond)
+	fmt.Printf("Duration: %d seconds\n\n", durationSeconds)
+	
+	// Calculate interval between requests
+	interval := time.Second / time.Duration(requestsPerSecond)
+	
+	// Create ticker for sending requests at the specified rate
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	
+	// Create done channel to signal end of test
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(time.Duration(durationSeconds) * time.Second)
+		close(done)
+	}()
+	
+	// Stats
+	var totalSent, succeeded, failed int
+	var wg sync.WaitGroup
+	
+	// Start stress test
+	fmt.Println("Running stress test...")
+	startTime := time.Now()
+	
+	// Loop until test duration is complete
+loop:
+	for {
+		select {
+		case <-ticker.C:
+			// Send a request
+			wg.Add(1)
+			totalSent++
+			go func(id int) {
+				defer wg.Done()
+				resp, err := http.Get(url)
+				if err != nil {
+					log.Printf("Request %d error: %v", id, err)
+					failed++
+					return
+				}
+				defer resp.Body.Close()
+				
+				if resp.StatusCode == http.StatusOK {
+					succeeded++
+				} else {
+					failed++
+				}
+			}(totalSent)
+		case <-done:
+			break loop
+		}
+	}
+	
+	// Wait for all requests to complete
+	wg.Wait()
+	duration := time.Since(startTime)
+	
+	// Print results
+	fmt.Println("\n=== Stress Test Results ===")
+	fmt.Printf("Total Requests: %d\n", totalSent)
+	fmt.Printf("Succeeded: %d (%.1f%%)\n", succeeded, float64(succeeded)/float64(totalSent)*100)
+	fmt.Printf("Failed: %d (%.1f%%)\n", failed, float64(failed)/float64(totalSent)*100)
+	fmt.Printf("Duration: %.2f seconds\n", duration.Seconds())
+	fmt.Printf("Actual RPS: %.2f requests/second\n", float64(totalSent)/duration.Seconds())
+}
+```
+
+### Testing the rate limiter
+
+```sh
+# 1. Start the server with a rate limit of 10 RPS and burst capacity of 15
+go run main.go -rate=10 -burst=15
+
+# In a separate terminal, check the current stats (before stress test)
+curl -s http://localhost:8080/stats
+
+# 2. Run a stress test at 20 RPS for 5 seconds (exceeding the limit)
+# This will make approximately 100 requests (20 RPS × 5 seconds)
+go run main.go -mode=client -stress=20 -duration=5
+
+# Expected output will show:
+# - Total Requests: ~100
+# - Succeeded: ~60-70 (first using the burst capacity, then limited to 10 RPS)
+# - Failed: ~30-40 (rate limited with HTTP 429)
+
+# 3. Check the stats again to see the impact
+curl -s http://localhost:8080/stats
+
+# 4. Run a more extreme test at 50 RPS for 3 seconds
+go run main.go -mode=client -stress=50 -duration=3
+
+# 5. For a visual representation of rate limiting, run a continuous stream of requests
+# and observe the pattern of accepted/rejected requests
+go run main.go -mode=client -stress=15 -duration=10
+
+# Sample expected output for the last command:
+# === Stress Test Results ===
+# Total Requests: 150
+# Succeeded: 107 (71.3%)
+# Failed: 43 (28.7%)
+# Duration: 10.05 seconds
+# Actual RPS: 14.93 requests/second
+```

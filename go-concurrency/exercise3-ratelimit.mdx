@@ -1,0 +1,38 @@
+---
+title: "Exercise 3: Rate Limiter"
+---
+
+## Problem Statement
+
+In this exercise, you will implement an API rate limiter using Go's `time.Ticker`. Rate limiting is a critical technique used in API design to control the number of requests a client can make within a specified time period.
+
+### Requirements:
+
+1. Create a rate limiter that allows a maximum of N requests per second.
+2. Implement a simulated API server that uses this rate limiter.
+3. The server should:
+   - Accept incoming requests
+   - Apply rate limiting
+   - Process valid requests 
+   - Reject requests that exceed the rate limit
+4. Use `time.Ticker` to manage the token bucket replenishment.
+5. Demonstrate the rate limiter with concurrent client requests.
+
+### Expected Behavior:
+
+- Requests within the rate limit should be processed normally.
+- Requests exceeding the rate limit should be rejected with a "Rate limit exceeded" message.
+- The rate limiter should properly distribute allowed requests across the time window.
+
+### Tips:
+
+- Consider using a token bucket algorithm where tokens are replenished at a steady rate.
+- Use channels to handle concurrent requests.
+- Test your implementation with both normal and burst traffic patterns.
+
+## Challenge Extension (Optional):
+
+Extend your solution to include:
+- Different rate limits for different API endpoints
+- A burst capacity that allows temporary exceeding of the rate limit
+- Request queuing when rate limit is exceeded (instead of immediate rejection)

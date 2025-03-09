@@ -1,0 +1,51 @@
+---
+title: "Exercise 2: Parallel Text Processing"
+---
+
+Now let's put your knowledge of goroutines, channels, and WaitGroups into practice with an exercise.
+
+### Task
+Create a program that processes a collection of text files in parallel. Your program should:
+
+1. Count the number of words in each file concurrently using goroutines
+2. Use channels to collect the results from each goroutine
+3. Use a WaitGroup to ensure all processing completes
+4. Print the total number of words across all files
+
+### Starting code
+
+```go
+package main
+
+import (
+    "fmt"
+    "strings"
+    "time"
+)
+
+// Simulated text files
+var textFiles = []string{
+    "Go is an open source programming language that makes it easy to build simple, reliable, and efficient software.",
+    "Go was designed at Google in 2007 to improve programming productivity in an era of multicore, networked machines.",
+    "The language is often referred to as Golang because of its former domain name, golang.org.",
+}
+
+// TODO: Implement a wordCounter function that counts words in a text and sends the result to a channel
+
+func main() {
+    start := time.Now()
+    
+    // TODO: Create necessary channels and WaitGroup
+    
+    // TODO: Launch goroutines to process each text file
+    
+    // TODO: Wait for all goroutines to complete and close the channel
+    
+    // TODO: Collect and sum all results
+    
+    elapsed := time.Since(start)
+    // Print results and timing information
+}
+```
+
+Try implementing this on your own before looking at the solution.

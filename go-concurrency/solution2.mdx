@@ -1,0 +1,81 @@
+---
+title: "Exercise 2: Solution"
+---
+
+Here's a complete solution to the exercise:
+
+```go
+package main
+
+import (
+    "fmt"
+    "strings"
+    "sync"
+    "time"
+)
+
+// Simulated text files
+var textFiles = []string{
+    "Go is an open source programming language that makes it easy to build simple, reliable, and efficient software.",
+    "Go was designed at Google in 2007 to improve programming productivity in an era of multicore, networked machines.",
+    "The language is often referred to as Golang because of its former domain name, golang.org.",
+}
+
+// WordCounter counts words in a text and sends the result to a channel
+func wordCounter(id int, text string, resultChan chan<- int, wg *sync.WaitGroup) {
+    defer wg.Done()
+    
+    // Simulate processing time
+    time.Sleep(100 * time.Millisecond)
+    
+    words := strings.Fields(text)
+    count := len(words)
+    
+    fmt.Printf("File %d has %d words\n", id, count)
+    
+    // Send result to channel
+    resultChan <- count
+}
+
+func main() {
+    start := time.Now()
+    
+    // Create a buffered channel to receive results
+    resultChan := make(chan int, len(textFiles))
+    
+    // Use a WaitGroup to wait for all goroutines to finish
+    var wg sync.WaitGroup
+    
+    // Start a goroutine for each text file
+    for i, text := range textFiles {
+        wg.Add(1)
+        go wordCounter(i, text, resultChan, &wg)
+    }
+    
+    // Start a goroutine to close the result channel once all wordCounters are done
+    go func() {
+        wg.Wait()
+        close(resultChan)
+    }()
+    
+    // Collect and sum all results
+    totalWords := 0
+    for count := range resultChan {
+        totalWords += count
+    }
+    
+    elapsed := time.Since(start)
+    fmt.Printf("Total words: %d\n", totalWords)
+    fmt.Printf("Processing took %s\n", elapsed)
+}
+```
+
+This solution demonstrates several important concurrency patterns:
+
+1. Using goroutines to process multiple files in parallel
+2. Using a channel to collect results from goroutines
+3. Using a `sync.WaitGroup` to wait for all goroutines to complete
+4. Closing a channel when all senders are done
+5. Using `range` to receive all values from a channel until it's closed
+
+When you run this program, you'll notice that the files are processed concurrently, and then the results are aggregated.

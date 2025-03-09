@@ -1,0 +1,448 @@
+---
+title: Mutexes
+---
+
+In the previous chapter, we learned how to coordinate multiple goroutines using `sync.WaitGroup`.
+However, when goroutines need to access shared resources, a new challenge arises: concurrent access can lead to data races and unpredictable behavior.
+
+## The Problem: Data Races
+
+Let's look at a simple example where multiple goroutines increment a counter:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	counter := 0
+	var wg sync.WaitGroup
+	
+	// Launch 1000 goroutines
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			counter++ // Shared resource access!
+		}()
+	}
+	
+	wg.Wait()
+	fmt.Println("Final counter value:", counter)
+}
+```
+
+If you run this program multiple times, you might get different results each time, even though you'd expect the counter to always be 1000. This happens because the `counter++` operation is not atomic—it consists of multiple steps (read value, increment, write back), and these steps can interleave between goroutines.
+
+## Enter sync.Mutex
+
+A mutex (mutual exclusion) is a synchronization primitive that ensures exclusive access to a resource. In Go, we use `sync.Mutex` to protect shared data:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	counter := 0
+	var wg sync.WaitGroup
+	var mu sync.Mutex // Add a mutex
+	
+	// Launch 1000 goroutines
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			
+			mu.Lock()   // Acquire the lock
+			counter++   // Safe access to shared resource
+			mu.Unlock() // Release the lock
+		}()
+	}
+	
+	wg.Wait()
+	fmt.Println("Final counter value:", counter)
+}
+```
+
+Now, the program will reliably print "Final counter value: 1000" because the mutex ensures that only one goroutine can access the counter at a time.
+
+## How Mutex Works
+
+A `sync.Mutex` has two primary methods:
+
+1. `Lock()` - Acquires the lock. If the lock is already in use, the calling goroutine blocks until the lock becomes available.
+2. `Unlock()` - Releases the lock, allowing other goroutines to acquire it.
+
+When a goroutine calls `Lock()`, it gains exclusive access to the shared resource until it calls `Unlock()`. Other goroutines that try to call `Lock()` will wait (block) until the lock is released.
+
+## Best Practices
+
+### Use defer for Unlock
+
+To ensure the mutex is always unlocked, even if the protected code panics, use `defer` to call `Unlock()`:
+
+```go
+func doSomething(mu *sync.Mutex) {
+	mu.Lock()
+	defer mu.Unlock()
+	
+	// Code that accesses shared resources
+	// If this code panics, the mutex will still be unlocked
+}
+```
+
+### Keep Critical Sections Small
+
+Lock only the code that needs protection to minimize contention:
+
+```go
+// Good - only lock the critical section
+func processItem(item Item, counter *int, mu *sync.Mutex) {
+	// Do expensive preprocessing
+	
+	mu.Lock()
+	*counter++
+	mu.Unlock()
+	
+	// Do more independent work
+}
+
+// Bad - lock held during non-critical work
+func processItemBad(item Item, counter *int, mu *sync.Mutex) {
+	mu.Lock()
+	defer mu.Unlock()
+	
+	// Do expensive preprocessing (unnecessarily under lock)
+	*counter++
+	// Do more independent work (unnecessarily under lock)
+}
+```
+
+### Avoid Nested Locks
+
+Be careful with nested locks, as they can lead to deadlocks if not managed correctly:
+
+```go
+// Potential deadlock if mutexes are acquired in different orders elsewhere
+func transferFunds(from, to *Account, amount int) {
+	from.mu.Lock()
+	defer from.mu.Unlock()
+	
+	to.mu.Lock()
+	defer to.mu.Unlock()
+	
+	// Transfer logic
+}
+```
+
+## RWMutex: Optimizing for Read-Heavy Workloads
+
+For scenarios where reads are much more frequent than writes, Go provides `sync.RWMutex` (read-write mutex), which allows multiple readers to access the data simultaneously while ensuring exclusive access for writers:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+type SafeCounter struct {
+	mu    sync.RWMutex
+	value int
+}
+
+func (c *SafeCounter) Increment() {
+	c.mu.Lock() // Exclusive lock for writing
+	defer c.mu.Unlock()
+	c.value++
+}
+
+func (c *SafeCounter) Value() int {
+	c.mu.RLock() // Shared lock for reading
+	defer c.mu.RUnlock()
+	return c.value
+}
+
+func main() {
+	counter := SafeCounter{}
+	var wg sync.WaitGroup
+	
+	// Writers
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				counter.Increment()
+				time.Sleep(time.Millisecond)
+			}
+		}()
+	}
+	
+	// Readers
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				value := counter.Value()
+				fmt.Printf("Reader %d: current value = %d\n", id, value)
+				time.Sleep(time.Millisecond)
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+	fmt.Printf("Final counter value: %d\n", counter.Value())
+}
+```
+
+`RWMutex` provides four methods:
+- `Lock()` and `Unlock()` for writers (exclusive access)
+- `RLock()` and `RUnlock()` for readers (shared access)
+
+## Practical Example: Thread-Safe Cache
+
+Let's build a simple thread-safe cache using a mutex:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+// Cache stores key-value pairs
+type Cache struct {
+	mu    sync.RWMutex
+	items map[string]Item
+}
+
+// Item represents a cached item with an expiration time
+type Item struct {
+	Value      string
+	Expiration time.Time
+}
+
+// NewCache creates a new cache
+func NewCache() *Cache {
+	return &Cache{
+		items: make(map[string]Item),
+	}
+}
+
+// Set adds or updates an item in the cache
+func (c *Cache) Set(key, value string, expiration time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	
+	c.items[key] = Item{
+		Value:      value,
+		Expiration: time.Now().Add(expiration),
+	}
+}
+
+// Get retrieves an item from the cache
+func (c *Cache) Get(key string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	
+	item, found := c.items[key]
+	if !found {
+		return "", false
+	}
+	
+	// Check if item is expired
+	if time.Now().After(item.Expiration) {
+		return "", false
+	}
+	
+	return item.Value, true
+}
+
+// Delete removes an item from the cache
+func (c *Cache) Delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	
+	delete(c.items, key)
+}
+
+func main() {
+	cache := NewCache()
+	var wg sync.WaitGroup
+	
+	// Writer goroutines
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			
+			for j := 0; j < 3; j++ {
+				key := fmt.Sprintf("key-%d-%d", id, j)
+				value := fmt.Sprintf("value-%d-%d", id, j)
+				cache.Set(key, value, 500*time.Millisecond)
+				fmt.Printf("Set %s = %s\n", key, value)
+				time.Sleep(100 * time.Millisecond)
+			}
+		}(i)
+	}
+	
+	// Reader goroutines
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			
+			for j := 0; j < 10; j++ {
+				for k := 0; k < 5; k++ {
+					key := fmt.Sprintf("key-%d-%d", k, j%3)
+					if value, found := cache.Get(key); found {
+						fmt.Printf("Reader %d found %s = %s\n", id, key, value)
+					}
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+	fmt.Println("Cache operations completed")
+}
+```
+
+This example demonstrates a thread-safe cache that can be accessed by multiple goroutines concurrently, using an `RWMutex` to optimize performance by allowing multiple readers to access the cache simultaneously.
+
+## Complete Working Example
+
+Here's the complete working code for the thread-safe cache example:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+// Cache stores key-value pairs
+type Cache struct {
+	mu    sync.RWMutex
+	items map[string]Item
+}
+
+// Item represents a cached item with an expiration time
+type Item struct {
+	Value      string
+	Expiration time.Time
+}
+
+// NewCache creates a new cache
+func NewCache() *Cache {
+	return &Cache{
+		items: make(map[string]Item),
+	}
+}
+
+// Set adds or updates an item in the cache
+func (c *Cache) Set(key, value string, expiration time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	
+	c.items[key] = Item{
+		Value:      value,
+		Expiration: time.Now().Add(expiration),
+	}
+}
+
+// Get retrieves an item from the cache
+func (c *Cache) Get(key string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	
+	item, found := c.items[key]
+	if !found {
+		return "", false
+	}
+	
+	// Check if item is expired
+	if time.Now().After(item.Expiration) {
+		return "", false
+	}
+	
+	return item.Value, true
+}
+
+// Delete removes an item from the cache
+func (c *Cache) Delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	
+	delete(c.items, key)
+}
+
+func main() {
+	cache := NewCache()
+	var wg sync.WaitGroup
+	
+	// Writer goroutines
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			
+			for j := 0; j < 3; j++ {
+				key := fmt.Sprintf("key-%d-%d", id, j)
+				value := fmt.Sprintf("value-%d-%d", id, j)
+				cache.Set(key, value, 500*time.Millisecond)
+				fmt.Printf("Set %s = %s\n", key, value)
+				time.Sleep(100 * time.Millisecond)
+			}
+		}(i)
+	}
+	
+	// Reader goroutines
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			
+			for j := 0; j < 10; j++ {
+				for k := 0; k < 5; k++ {
+					key := fmt.Sprintf("key-%d-%d", k, j%3)
+					if value, found := cache.Get(key); found {
+						fmt.Printf("Reader %d found %s = %s\n", id, key, value)
+					}
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+	fmt.Println("Cache operations completed")
+}
+```
+
+## Summary
+
+- Mutexes (`sync.Mutex`) protect shared resources from concurrent access
+- Use `Lock()` and `Unlock()` to control access to critical sections
+- For read-heavy workloads, use `sync.RWMutex` to allow multiple readers
+- Use `defer mu.Unlock()` to ensure the mutex is released even if the function panics
+- Keep critical sections small to minimize contention
+- Be careful with nested locks to avoid deadlocks
+
+In the next chapter, we'll explore the `context` package and how to handle signals for graceful termination of Go programs.

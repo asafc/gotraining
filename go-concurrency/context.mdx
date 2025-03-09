@@ -1,0 +1,458 @@
+---
+title: Context and Signal Handling
+---
+
+In the previous chapters, we've learned how to coordinate goroutines with WaitGroups and protect shared resources with Mutexes. However, there's still a critical aspect of concurrent programming we need to address: how to gracefully cancel or time out operations and handle external signals like Ctrl+C.
+
+## The Problem: Cancellation and Timeouts
+
+When working with concurrent operations, we often need to:
+- Cancel operations that are taking too long
+- Stop all operations when one fails
+- Gracefully shut down the program when the user presses Ctrl+C
+- Propagate cancellation requests through multiple goroutines
+
+Let's illustrate this with a simple example:
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+func worker(id int, wg *sync.WaitGroup) {
+	defer wg.Done()
+	
+	fmt.Printf("Worker %d starting\n", id)
+	
+	// Long-running operation
+	time.Sleep(5 * time.Second)
+	
+	fmt.Printf("Worker %d done\n", id)
+}
+
+func main() {
+	var wg sync.WaitGroup
+	
+	// Start 3 workers
+	for i := 1; i <= 3; i++ {
+		wg.Add(1)
+		go worker(i, &wg)
+	}
+	
+	// No way to cancel workers if needed
+	wg.Wait()
+	fmt.Println("All workers completed")
+}
+```
+
+In this example, once the workers are started, we have no way to cancel them if necessary.
+
+## Enter the Context Package
+
+Go's standard library provides the `context` package to solve these problems. A context is a value that can be passed through a program's call stack, carrying deadlines, cancellation signals, and request-scoped values.
+
+The `context` package defines the `Context` type, which has the following methods:
+- `Done()`: Returns a channel that's closed when the context is cancelled
+- `Err()`: Returns the reason why the context was cancelled
+- `Deadline()`: Returns the time when the context will be cancelled, if any
+- `Value(key any)`: Returns the value associated with the key, if any
+
+### Creating and Using Contexts
+
+There are several ways to create a context:
+- `context.Background()`: The root context, typically used at program startup
+- `context.TODO()`: Similar to Background(), indicates the context should be replaced later
+- `context.WithCancel(parent)`: Creates a context that can be cancelled manually
+- `context.WithDeadline(parent, time)`: Creates a context that's cancelled at a specific time
+- `context.WithTimeout(parent, duration)`: Creates a context that's cancelled after a duration
+- `context.WithValue(parent, key, value)`: Creates a context with a key-value pair
+
+Let's modify our worker example to use context for cancellation:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+)
+
+func worker(ctx context.Context, id int, wg *sync.WaitGroup) {
+	defer wg.Done()
+	
+	fmt.Printf("Worker %d starting\n", id)
+	
+	select {
+	case <-time.After(5 * time.Second):
+		fmt.Printf("Worker %d completed task\n", id)
+	case <-ctx.Done():
+		fmt.Printf("Worker %d cancelled: %v\n", id, ctx.Err())
+		return
+	}
+}
+
+func main() {
+	// Create a context that can be cancelled
+	ctx, cancel := context.WithCancel(context.Background())
+	
+	var wg sync.WaitGroup
+	
+	// Start 3 workers
+	for i := 1; i <= 3; i++ {
+		wg.Add(1)
+		go worker(ctx, i, &wg)
+	}
+	
+	// Cancel all workers after 2 seconds
+	go func() {
+		time.Sleep(2 * time.Second)
+		fmt.Println("Cancelling all workers...")
+		cancel()
+	}()
+	
+	// Wait for all workers to finish
+	wg.Wait()
+	fmt.Println("All workers completed or cancelled")
+}
+```
+
+Now, all workers are cancelled after 2 seconds, demonstrating how a cancellation signal can be propagated to multiple goroutines.
+
+## Handling Timeouts
+
+We can also set timeouts using context:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+)
+
+func slowOperation(ctx context.Context) (string, error) {
+	// Simulate a slow database query
+	select {
+	case <-time.After(3 * time.Second):
+		return "Operation completed", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func main() {
+	// Create a context with a 2-second timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel() // Always call cancel, even if the timeout expires
+	
+	result, err := slowOperation(ctx)
+	if err != nil {
+		fmt.Printf("Operation failed: %v\n", err)
+		return
+	}
+	
+	fmt.Println(result)
+}
+```
+
+In this example, the operation will time out after 2 seconds because it takes 3 seconds to complete.
+
+## Signal Handling: Graceful Shutdown
+
+One of the most common uses of context is to handle operating system signals, particularly for graceful shutdown when a user presses Ctrl+C (which sends a SIGINT signal).
+
+Here's how to handle OS signals with context:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+)
+
+func worker(ctx context.Context, id int, wg *sync.WaitGroup) {
+	defer wg.Done()
+	
+	fmt.Printf("Worker %d starting\n", id)
+	
+	for {
+		select {
+		case <-time.After(1 * time.Second):
+			fmt.Printf("Worker %d doing work...\n", id)
+		case <-ctx.Done():
+			fmt.Printf("Worker %d shutting down: %v\n", id, ctx.Err())
+			return
+		}
+	}
+}
+
+func main() {
+	// Create a base context
+	ctx, cancel := context.WithCancel(context.Background())
+	
+	// Set up signal handling
+	signalChan := make(chan os.Signal, 1)
+	// Listen for interrupt (Ctrl+C) and termination signals
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+	
+	var wg sync.WaitGroup
+	
+	// Start workers
+	for i := 1; i <= 3; i++ {
+		wg.Add(1)
+		go worker(ctx, i, &wg)
+	}
+	
+	// Wait for interrupt signal
+	sig := <-signalChan
+	fmt.Printf("\nReceived signal: %v\n", sig)
+	fmt.Println("Initiating graceful shutdown...")
+	
+	// Cancel the context, which will notify all workers
+	cancel()
+	
+	// Wait for workers to finish with a timeout
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	
+	// Give workers 5 seconds to finish
+	select {
+	case <-done:
+		fmt.Println("All workers shut down gracefully")
+	case <-time.After(5 * time.Second):
+		fmt.Println("Timeout: Some workers did not shut down gracefully")
+	}
+}
+```
+
+This example demonstrates a complete graceful shutdown pattern:
+1. Set up signal handling to catch Ctrl+C
+2. When the signal is received, cancel the context
+3. Wait for workers to finish with a timeout
+4. If workers don't finish within the timeout, report that they didn't shut down gracefully
+
+## Practical Example: HTTP Server with Graceful Shutdown
+
+Let's apply these concepts to a real-world example: an HTTP server that shuts down gracefully when Ctrl+C is pressed:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+)
+
+func slowHandler(w http.ResponseWriter, r *http.Request) {
+	// Extract context from request
+	ctx := r.Context()
+	
+	log.Println("Slow handler started")
+	select {
+	case <-time.After(5 * time.Second):
+		fmt.Fprintln(w, "Slow operation completed")
+		log.Println("Slow handler completed")
+	case <-ctx.Done():
+		// The client disconnected or the server is shutting down
+		log.Println("Slow handler cancelled:", ctx.Err())
+		return
+	}
+}
+
+func main() {
+	// Create a simple HTTP server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/slow", slowHandler)
+	
+	// Create a server with some reasonable timeouts
+	server := &http.Server{
+		Addr:         ":8080",
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  30 * time.Second,
+	}
+	
+	// Channel to listen for errors coming from the listener
+	serverErrors := make(chan error, 1)
+	
+	// Start the server in a goroutine
+	go func() {
+		log.Println("Server listening on port 8080")
+		serverErrors <- server.ListenAndServe()
+	}()
+	
+	// Set up signal handling
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+	
+	// Block until we receive a signal or an error from the server
+	select {
+	case err := <-serverErrors:
+		log.Fatalf("Server error: %v", err)
+	case sig := <-signalChan:
+		log.Printf("Received signal: %v\n", sig)
+		
+		// Create a deadline context for shutdown
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		
+		// Tell the server to stop accepting new requests and finish existing ones
+		log.Println("Initiating graceful shutdown...")
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("Shutdown error: %v\n", err)
+			// Force close if graceful shutdown fails
+			if err := server.Close(); err != nil {
+				log.Fatalf("Force close error: %v\n", err)
+			}
+		}
+		
+		log.Println("Server shut down gracefully")
+	}
+}
+```
+
+In this example:
+1. We create an HTTP server with a slow handler
+2. We use signal handling to catch Ctrl+C
+3. When the signal is received, we call `server.Shutdown()` with a timeout
+4. The server stops accepting new connections but finishes processing existing ones
+5. If the graceful shutdown doesn't complete within the timeout, we force close the server
+
+## Context Best Practices
+
+1. **Pass Context as the First Parameter**
+   ```go
+   func DoSomething(ctx context.Context, arg Arg) error {
+       // ...
+   }
+   ```
+
+2. **Don't Store Contexts in Structs**
+   - Pass contexts through function calls, not stored in structs
+
+3. **Cancel Contexts When Done**
+   ```go
+   ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+   defer cancel() // Always defer cancel to avoid leaks
+   ```
+
+4. **Don't Pass nil Contexts**
+   - If you're not sure which context to use, use `context.TODO()`
+
+5. **Use Context Values Sparingly**
+   - Context values should be request-scoped (e.g., request IDs, auth tokens)
+   - Don't use them for passing optional parameters
+
+## Complete Working Example
+
+Here's the complete working example of a command-line tool that runs multiple workers and handles graceful shutdown with Ctrl+C:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+)
+
+// Worker simulates a long-running task
+func worker(ctx context.Context, id int, wg *sync.WaitGroup) {
+	defer wg.Done()
+	
+	fmt.Printf("Worker %d starting\n", id)
+	
+	for {
+		select {
+		case <-time.After(1 * time.Second):
+			fmt.Printf("Worker %d doing work...\n", id)
+		case <-ctx.Done():
+			fmt.Printf("Worker %d shutting down: %v\n", id, ctx.Err())
+			// Simulate cleanup work
+			time.Sleep(time.Duration(id) * 500 * time.Millisecond)
+			fmt.Printf("Worker %d cleanup complete\n", id)
+			return
+		}
+	}
+}
+
+func main() {
+	fmt.Println("Starting application... Press Ctrl+C to shutdown")
+	
+	// Create a base context
+	ctx, cancel := context.WithCancel(context.Background())
+	
+	// Set up signal handling
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+	
+	var wg sync.WaitGroup
+	
+	// Start workers
+	for i := 1; i <= 5; i++ {
+		wg.Add(1)
+		go worker(ctx, i, &wg)
+	}
+	
+	// Wait for interrupt signal in a separate goroutine
+	go func() {
+		sig := <-signalChan
+		fmt.Printf("\nReceived signal: %v\n", sig)
+		fmt.Println("Initiating graceful shutdown...")
+		
+		// Cancel the context, which will notify all workers
+		cancel()
+	}()
+	
+	// Wait for all workers to finish
+	wg.Wait()
+	fmt.Println("All workers have shut down")
+	fmt.Println("Application exited gracefully")
+}
+```
+
+This example demonstrates:
+1. Starting multiple workers that run indefinitely
+2. Setting up signal handling to catch Ctrl+C
+3. Cancelling all workers via context when the signal is received
+4. Waiting for all workers to finish their cleanup
+5. Exiting gracefully once all workers are done
+
+## Summary
+
+- The `context` package provides tools for cancellation, timeouts, and value propagation
+- Use context to manage goroutine lifetimes and ensure they can be cancelled
+- Signal handling with context enables graceful shutdown patterns
+- Always defer cancelling contexts to avoid resource leaks
+- Pass contexts as the first parameter in function signatures
+- Use context values sparingly and only for request-scoped data
+
+Context and signal handling are essential for building robust Go applications that can handle unexpected situations gracefully and prevent resource leaks.

@@ -1,3 +1,291 @@
 ---
-title: Go Routines
+title: Go Routines and Channels
 ---
+
+In this chapter, we'll explore one of Go's most powerful features: concurrency.
+
+Go's concurrency model is based on goroutines and channels, which provide a simple yet effective way to write concurrent code.
+
+## Goroutines
+
+A goroutine is a **lightweight thread** managed by the Go runtime. Goroutines run in the same address space, so access to shared memory must be synchronized. Starting a goroutine is simple - just use the `go` keyword followed by a function call.
+
+```go
+package main
+
+import (
+    "fmt"
+    "time"
+)
+
+func say(s string) {
+    for i := 0; i < 5; i++ {
+        time.Sleep(100 * time.Millisecond)
+        fmt.Println(s)
+    }
+}
+
+func main() {
+    // Direct function call - runs synchronously
+    say("Direct call")
+    
+    // Using go keyword to run in a new goroutine - runs asynchronously
+    go say("goroutine")
+    
+    // This ensures the program doesn't exit before the goroutine completes
+    time.Sleep(2 * time.Second)
+}
+```
+
+When you run this program, you'll notice that "Direct call" is printed 5 times, followed by "goroutine" being printed. The direct call blocks the main function until it completes, while the goroutine runs concurrently.
+
+However, using `time.Sleep()` to wait for goroutines to finish is not ideal. This brings us to channels.
+
+## Channels
+
+Channels are a typed conduit through which you can send and receive values. They provide a way for goroutines to communicate with each other and synchronize their execution.
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    // Create a new channel of type int
+    ch := make(chan int)
+    
+    // Start a goroutine
+    go func() {
+        // Send a value to the channel
+        ch <- 42
+    }()
+    
+    // Receive a value from the channel
+    value := <-ch // blocks until a value is available.
+    fmt.Println(value)  // Prints: 42
+}
+```
+
+In this example, the main function creates a channel, starts a goroutine that sends a value on the channel, and then receives that value. The receive operation `<-ch` blocks until a value is available.
+
+By default, sends and receives block until the other side is ready. This allows goroutines to synchronize without explicit locks or condition variables.
+
+## Buffered Channels
+
+Channels can be buffered, meaning they can hold a limited number of values without a corresponding receiver.
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    // Create a buffered channel with capacity 2
+    ch := make(chan int, 2)
+    
+    // These sends won't block because the buffer has room
+    ch <- 1
+    ch <- 2
+    
+    // Receive values
+    fmt.Println(<-ch)  // Prints: 1
+    fmt.Println(<-ch)  // Prints: 2
+}
+```
+
+Sends to a buffered channel block only when the buffer is full. Receives block when the buffer is empty.
+
+If you try to send a value on a buffered channel that's already full, the send operation will block until space is available. Similarly, if you try to receive from an empty channel, the receive operation will block until a value is sent.
+
+## Passing Messages Between Goroutines
+
+Let's see a more practical example of passing messages between goroutines:
+
+```go
+package main
+
+import "fmt"
+
+func sum(s []int, c chan int) {
+    sum := 0
+    for _, v := range s {
+        sum += v
+    }
+    // Send sum to channel c
+    c <- sum
+}
+
+func main() {
+    s := []int{7, 2, 8, -9, 4, 0}
+    
+    // Create a channel
+    c := make(chan int)
+    
+    // Split the slice in two and process each half concurrently
+    go sum(s[:len(s)/2], c)
+    go sum(s[len(s)/2:], c)
+    
+    // Receive from channel
+    x, y := <-c, <-c
+    
+    fmt.Println(x, y, x+y)  // Output depends on which goroutine finishes first
+}
+```
+
+In this example, we split a slice in half and compute the sum of each half concurrently. The results are sent back via a channel.
+
+## Closing Channels
+
+A sender can close a channel to indicate that no more values will be sent. Receivers can test whether a channel has been closed.
+
+```go
+package main
+
+import "fmt"
+
+func fibonacci(n int, c chan int) {
+    x, y := 0, 1
+    for i := 0; i < n; i++ {
+        c <- x
+        x, y = y, x+y
+    }
+    // Close the channel when done
+    close(c)
+}
+
+func main() {
+    c := make(chan int, 10)
+    go fibonacci(10, c)
+    
+    // Method 1: Simple loop receiving until channel closes
+    for i := range c {
+        fmt.Println(i)
+    }
+    
+    // Method 2: Testing if channel is closed
+    ch := make(chan int, 2)
+    ch <- 1
+    ch <- 2
+    close(ch)
+    
+    v, ok := <-ch
+    fmt.Println(v, ok)  // Prints: 1 true
+    
+    v, ok = <-ch
+    fmt.Println(v, ok)  // Prints: 2 true
+    
+    v, ok = <-ch
+    fmt.Println(v, ok)  // Prints: 0 false
+}
+```
+
+When receiving from a closed channel:
+1. The second value returned by the receive operation tells you whether the channel is still open.
+2. The first value is the zero value of the channel's type if the channel is closed and empty.
+
+## Range Over Channel
+
+The `range` form of the for loop can be used to receive values from a channel until it is closed:
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    ch := make(chan int, 5)
+    
+    // Send values
+    for i := 0; i < 5; i++ {
+        ch <- i
+    }
+    close(ch)
+    
+    // Receive values using range
+    for n := range ch {
+        fmt.Println(n)
+    }
+}
+```
+
+The loop receives values from the channel repeatedly until the channel is closed.
+
+## Select Statement
+
+The `select` statement lets a goroutine wait on multiple communication operations. It blocks until one of its cases can proceed, then it executes that case. If multiple cases are ready, it chooses one at random.
+
+```go
+package main
+
+import (
+    "fmt"
+    "time"
+)
+
+func main() {
+    c1 := make(chan string)
+    c2 := make(chan string)
+    
+    go func() {
+        time.Sleep(1 * time.Second)
+        c1 <- "one"
+    }()
+    
+    go func() {
+        time.Sleep(2 * time.Second)
+        c2 <- "two"
+    }()
+    
+    for i := 0; i < 2; i++ {
+        select {
+        case msg1 := <-c1:
+            fmt.Println("received", msg1)
+        case msg2 := <-c2:
+            fmt.Println("received", msg2)
+        }
+    }
+}
+```
+
+In this example, the first goroutine sends "one" after 1 second, and the second goroutine sends "two" after 2 seconds. The `select` statement in the main function will first receive "one" and then "two".
+
+A `default` case in a `select` is run if no other case is ready:
+
+```go
+package main
+
+import (
+    "fmt"
+    "time"
+)
+
+func main() {
+    tick := time.Tick(100 * time.Millisecond)
+    boom := time.After(500 * time.Millisecond)
+    
+    for {
+        select {
+        case <-tick:
+            fmt.Println("tick.")
+        case <-boom:
+            fmt.Println("BOOM!")
+            return
+        default:
+            fmt.Println("    .")
+            time.Sleep(50 * time.Millisecond)
+        }
+    }
+}
+```
+
+The `default` case prevents the `select` from blocking.
+
+## Key Takeaways
+
+- Goroutines are lightweight threads managed by the Go runtime
+- Channels are typed conduits for sending and receiving values
+- Buffered channels can store a limited number of values
+- The `select` statement lets a goroutine wait on multiple channels
+- Closing channels indicates that no more values will be sent
+- The `range` loop can be used to receive values until a channel is closed
+- Using goroutines and channels can significantly improve performance for I/O-bound or CPU-bound tasks

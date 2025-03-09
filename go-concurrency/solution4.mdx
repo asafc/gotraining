@@ -1,0 +1,624 @@
+---
+title: "Exercise 4: Solution"
+---
+
+Below is a complete implementation of the concurrent web crawler exercise.
+The solution demonstrates multiple concurrency patterns, proper error handling, and clean project organization.
+
+## Project Structure
+
+Let's start by setting up our project structure:
+
+```
+webcrawler/
+├── cmd/
+│   └── crawler/
+│       └── main.go
+├── internal/
+│   ├── crawler/
+│   │   ├── crawler.go
+│   │   ├── worker.go
+│   │   └── queue.go
+│   └── utils/
+│       └── url.go
+├── pkg/
+│   └── config/
+│       └── config.go
+├── go.mod
+└── go.sum
+```
+
+## Implementation
+
+### main.go
+
+```go
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+	"github.com/yourusername/webcrawler/internal/crawler"
+	"github.com/yourusername/webcrawler/pkg/config"
+)
+
+func main() {
+	cfg := config.NewDefaultConfig()
+
+	var rootCmd = &cobra.Command{
+		Use:   "crawler [url]",
+		Short: "A concurrent web crawler",
+		Long: `A concurrent web crawler built with Go that demonstrates various concurrency patterns.
+It respects robots.txt, handles errors gracefully, and avoids infinite loops.`,
+		Args: cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			startURL := args[0]
+			crawl := crawler.NewCrawler(cfg)
+			
+			fmt.Printf("Starting crawl from %s with max depth %d and %d workers\n", 
+				startURL, cfg.MaxDepth, cfg.Workers)
+			
+			results, err := crawl.Start(cmd.Context(), startURL)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error during crawl: %v\n", err)
+				os.Exit(1)
+			}
+			
+			fmt.Printf("\nCrawl completed!\n")
+			fmt.Printf("Pages crawled: %d\n", len(results.VisitedURLs))
+			fmt.Printf("Errors encountered: %d\n", results.ErrorCount)
+			fmt.Printf("Time taken: %v\n", results.Duration)
+		},
+	}
+
+	// Add flags
+	rootCmd.Flags().IntVarP(&cfg.Workers, "workers", "w", cfg.Workers, "Number of worker goroutines")
+	rootCmd.Flags().IntVarP(&cfg.MaxDepth, "depth", "d", cfg.MaxDepth, "Maximum crawl depth")
+	rootCmd.Flags().IntVarP(&cfg.MaxRetries, "retries", "r", cfg.MaxRetries, "Maximum retry attempts for failed requests")
+	rootCmd.Flags().DurationVarP(&cfg.Timeout, "timeout", "t", cfg.Timeout, "Timeout for the entire crawl operation")
+	rootCmd.Flags().BoolVarP(&cfg.RespectRobotsTxt, "respect-robots", "R", cfg.RespectRobotsTxt, "Respect robots.txt rules")
+	rootCmd.Flags().StringSliceVarP(&cfg.AllowedDomains, "domains", "D", cfg.AllowedDomains, "Allowed domains to crawl (empty means only starting domain)")
+	rootCmd.Flags().IntVarP(&cfg.Delay, "delay", "l", cfg.Delay, "Delay between requests in milliseconds")
+
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+```
+
+### pkg/config/config.go
+
+```go
+package config
+
+import "time"
+
+// Config holds all configuration for the crawler
+type Config struct {
+	// Concurrency settings
+	Workers int
+
+	// Crawl behavior
+	MaxDepth        int
+	AllowedDomains  []string
+	RespectRobotsTxt bool
+	UserAgent       string
+	Delay           int // in milliseconds
+
+	// Error handling
+	MaxRetries int
+	Timeout    time.Duration
+}
+
+// NewDefaultConfig returns a Config with sensible defaults
+func NewDefaultConfig() *Config {
+	return &Config{
+		Workers:         5,
+		MaxDepth:        3,
+		AllowedDomains:  []string{},
+		RespectRobotsTxt: true,
+		UserAgent:       "Mozilla/5.0 (compatible; GoCrawler/1.0)",
+		MaxRetries:      3,
+		Timeout:         time.Minute * 5,
+		Delay:           200,
+	}
+}
+```
+
+### internal/crawler/crawler.go
+
+```go
+package crawler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/url"
+	"sync"
+	"time"
+
+	"github.com/gocolly/colly/v2"
+	"github.com/yourusername/webcrawler/internal/utils"
+	"github.com/yourusername/webcrawler/pkg/config"
+)
+
+// CrawlResults contains the results of a crawl operation
+type CrawlResults struct {
+	VisitedURLs map[string]bool
+	ErrorCount  int
+	Duration    time.Duration
+}
+
+// Crawler manages the web crawling process
+type Crawler struct {
+	config      *config.Config
+	visitedURLs sync.Map
+	errorCount  int
+	mu          sync.Mutex
+}
+
+// NewCrawler creates a new crawler with the provided configuration
+func NewCrawler(cfg *config.Config) *Crawler {
+	return &Crawler{
+		config:      cfg,
+		visitedURLs: sync.Map{},
+		errorCount:  0,
+	}
+}
+
+// Start initiates the crawling process from a starting URL
+func (c *Crawler) Start(ctx context.Context, startURL string) (*CrawlResults, error) {
+	startTime := time.Now()
+
+	// Validate starting URL
+	parsedURL, err := url.Parse(startURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid starting URL: %w", err)
+	}
+
+	// Create a context with timeout
+	ctx, cancel := context.WithTimeout(ctx, c.config.Timeout)
+	defer cancel()
+
+	// Create URL queue
+	queue := NewURLQueue()
+
+	// Create a worker pool using a wait group
+	var wg sync.WaitGroup
+	wg.Add(c.config.Workers)
+
+	// Create error channel to communicate errors
+	errChan := make(chan error, c.config.Workers)
+
+	// Start the worker goroutines
+	for i := 0; i < c.config.Workers; i++ {
+		workerID := i + 1
+		worker := NewWorker(workerID, c.config, &c.visitedURLs, queue, &c.mu)
+		go func() {
+			defer wg.Done()
+			err := worker.Run(ctx)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				errChan <- err
+			}
+		}()
+	}
+
+	// Set up allowed domains
+	allowedDomains := c.config.AllowedDomains
+	if len(allowedDomains) == 0 {
+		allowedDomains = []string{parsedURL.Hostname()}
+	}
+
+	// Add the starting URL to the queue
+	queue.Push(&URLItem{
+		URL:   startURL,
+		Depth: 0,
+	})
+
+	// Wait for goroutines in separate goroutine
+	go func() {
+		wg.Wait()
+		close(errChan)
+		queue.Close()
+	}()
+
+	// Monitor for errors or completion
+	select {
+	case err := <-errChan:
+		if err != nil {
+			cancel() // Cancel context on error
+			return nil, fmt.Errorf("crawler error: %w", err)
+		}
+	case <-queue.Done():
+		// Queue is empty and all processing is done
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	// Convert sync.Map to regular map for results
+	visitedMap := make(map[string]bool)
+	c.visitedURLs.Range(func(key, value interface{}) bool {
+		visitedMap[key.(string)] = true
+		return true
+	})
+
+	return &CrawlResults{
+		VisitedURLs: visitedMap,
+		ErrorCount:  c.errorCount,
+		Duration:    time.Since(startTime),
+	}, nil
+}
+
+// incrementErrorCount safely increments the error counter
+func (c *Crawler) incrementErrorCount() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.errorCount++
+}
+```
+
+### internal/crawler/worker.go
+
+```go
+package crawler
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/gocolly/colly/v2"
+	"github.com/yourusername/webcrawler/internal/utils"
+	"github.com/yourusername/webcrawler/pkg/config"
+)
+
+// Worker represents a single crawler worker
+type Worker struct {
+	id          int
+	config      *config.Config
+	collector   *colly.Collector
+	visitedURLs *sync.Map
+	queue       *URLQueue
+	mu          *sync.Mutex
+}
+
+// NewWorker creates a new worker with the given configuration
+func NewWorker(id int, cfg *config.Config, visitedURLs *sync.Map, queue *URLQueue, mu *sync.Mutex) *Worker {
+	// Create a new collector
+	c := colly.NewCollector(
+		colly.UserAgent(cfg.UserAgent),
+		colly.MaxDepth(cfg.MaxDepth),
+		colly.Async(true),
+	)
+
+	// Set up collector
+	c.Limit(&colly.LimitRule{
+		DomainGlob:  "*",
+		Parallelism: 1, // Each worker handles one request at a time
+		Delay:       time.Duration(cfg.Delay) * time.Millisecond,
+	})
+
+	if cfg.RespectRobotsTxt {
+		c.AllowedDomains = cfg.AllowedDomains
+		c.AllowURLRevisit = false
+	}
+
+	worker := &Worker{
+		id:          id,
+		config:      cfg,
+		collector:   c,
+		visitedURLs: visitedURLs,
+		queue:       queue,
+		mu:          mu,
+	}
+
+	// Set up collector callbacks
+	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
+		link := e.Request.AbsoluteURL(e.Attr("href"))
+		if link == "" {
+			return
+		}
+
+		if utils.IsValidURL(link) {
+			currentDepth := worker.getDepthFromContext(e.Request.Ctx)
+			if currentDepth < cfg.MaxDepth {
+				// Push to queue instead of directly visiting
+				worker.queue.Push(&URLItem{
+					URL:   link,
+					Depth: currentDepth + 1,
+				})
+			}
+		}
+	})
+
+	c.OnRequest(func(r *colly.Request) {
+		depth := worker.getDepthFromContext(r.Ctx)
+		fmt.Printf("[Worker %d] Visiting %s (depth: %d)\n", id, r.URL, depth)
+	})
+
+	c.OnError(func(r *colly.Response, err error) {
+		url := r.Request.URL.String()
+		retries := worker.getRetriesFromContext(r.Request.Ctx)
+
+		fmt.Printf("[Worker %d] Error %d: %s %s (retry: %d/%d)\n", 
+			id, r.StatusCode, url, err, retries, cfg.MaxRetries)
+
+		if retries < cfg.MaxRetries {
+			// Requeue with incremented retry count
+			ctx := colly.NewContext()
+			ctx.Put("depth", worker.getDepthFromContext(r.Request.Ctx))
+			ctx.Put("retries", retries+1)
+
+			worker.queue.Push(&URLItem{
+				URL:   url,
+				Depth: worker.getDepthFromContext(r.Request.Ctx),
+				Ctx:   ctx,
+			})
+		} else {
+			// Max retries reached, increment error count
+			worker.mu.Lock()
+			defer worker.mu.Unlock()
+			// Increment crawler's error count
+		}
+	})
+
+	c.OnResponse(func(r *colly.Response) {
+		url := r.Request.URL.String()
+		worker.visitedURLs.Store(url, true)
+	})
+
+	return worker
+}
+
+// Run starts the worker processing loop
+func (w *Worker) Run(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Printf("[Worker %d] Shutting down: %v\n", w.id, ctx.Err())
+			return ctx.Err()
+		default:
+			// Try to get an item from the queue
+			item, err := w.queue.Pop(ctx)
+			if err != nil {
+				if err == ErrQueueClosed {
+					fmt.Printf("[Worker %d] Queue closed, shutting down\n", w.id)
+					return nil
+				}
+				return err
+			}
+
+			// Check if URL has already been visited
+			if _, visited := w.visitedURLs.Load(item.URL); visited {
+				continue
+			}
+
+			// Create a context for this URL
+			reqCtx := colly.NewContext()
+			reqCtx.Put("depth", item.Depth)
+			
+			if item.Ctx != nil {
+				// Copy values from item context
+				if retries, ok := item.Ctx.GetAny("retries").(int); ok {
+					reqCtx.Put("retries", retries)
+				} else {
+					reqCtx.Put("retries", 0)
+				}
+			} else {
+				reqCtx.Put("retries", 0)
+			}
+
+			// Visit the URL
+			err = w.collector.Request("GET", item.URL, nil, reqCtx, nil)
+			if err != nil {
+				fmt.Printf("[Worker %d] Request error: %v\n", w.id, err)
+			}
+			
+			// Allow collector to process the request
+			w.collector.Wait()
+		}
+	}
+}
+
+// getDepthFromContext retrieves the depth from a colly context
+func (w *Worker) getDepthFromContext(ctx *colly.Context) int {
+	if depth, ok := ctx.GetAny("depth").(int); ok {
+		return depth
+	}
+	return 0
+}
+
+// getRetriesFromContext retrieves the retry count from a colly context
+func (w *Worker) getRetriesFromContext(ctx *colly.Context) int {
+	if retries, ok := ctx.GetAny("retries").(int); ok {
+		return retries
+	}
+	return 0
+}
+```
+
+### internal/crawler/queue.go
+
+```go
+package crawler
+
+import (
+	"context"
+	"errors"
+	"sync"
+
+	"github.com/gocolly/colly/v2"
+)
+
+// ErrQueueClosed is returned when attempting to push/pop from a closed queue
+var ErrQueueClosed = errors.New("url queue is closed")
+
+// URLItem represents a URL to be crawled with its metadata
+type URLItem struct {
+	URL   string
+	Depth int
+	Ctx   *colly.Context
+}
+
+// URLQueue is a thread-safe queue for URLs to be crawled
+type URLQueue struct {
+	items    []*URLItem
+	mu       sync.Mutex
+	closed   bool
+	nonEmpty chan struct{}
+	done     chan struct{}
+	wg       sync.WaitGroup
+}
+
+// NewURLQueue creates a new URL queue
+func NewURLQueue() *URLQueue {
+	return &URLQueue{
+		items:    make([]*URLItem, 0),
+		nonEmpty: make(chan struct{}, 1),
+		done:     make(chan struct{}),
+	}
+}
+
+// Push adds a URL to the queue
+func (q *URLQueue) Push(item *URLItem) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.closed {
+		return ErrQueueClosed
+	}
+
+	q.items = append(q.items, item)
+	q.wg.Add(1)
+
+	// Signal that the queue is non-empty
+	select {
+	case q.nonEmpty <- struct{}{}:
+	default:
+		// Channel already has an item, no need to send
+	}
+
+	return nil
+}
+
+// Pop removes and returns a URL from the queue
+// It blocks if the queue is empty until an item is available or the context is canceled
+func (q *URLQueue) Pop(ctx context.Context) (*URLItem, error) {
+	for {
+		// First check if we have items without locking
+		q.mu.Lock()
+		if q.closed && len(q.items) == 0 {
+			q.mu.Unlock()
+			return nil, ErrQueueClosed
+		}
+
+		if len(q.items) > 0 {
+			item := q.items[0]
+			q.items = q.items[1:]
+			q.mu.Unlock()
+			q.wg.Done()
+			return item, nil
+		}
+		q.mu.Unlock()
+
+		// Wait for an item to be pushed or context to be canceled
+		select {
+		case <-q.nonEmpty:
+			// Continue the loop to try popping again
+			continue
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-q.done:
+			return nil, ErrQueueClosed
+		}
+	}
+}
+
+// Close closes the queue, preventing further pushes
+// It returns immediately, but Pop operations will continue to work until the queue is empty
+func (q *URLQueue) Close() {
+	q.mu.Lock()
+	if !q.closed {
+		q.closed = true
+	}
+	q.mu.Unlock()
+	
+	// Start a goroutine to signal done when all items are processed
+	go func() {
+		q.wg.Wait()
+		close(q.done)
+	}()
+}
+
+// Done returns a channel that's closed when the queue is closed and all items have been processed
+func (q *URLQueue) Done() <-chan struct{} {
+	return q.done
+}
+```
+
+### internal/utils/url.go
+
+```go
+package utils
+
+import (
+	"net/url"
+	"strings"
+)
+
+// IsValidURL checks if a URL is valid for crawling
+func IsValidURL(rawURL string) bool {
+	// Parse the URL
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+
+	// Check if scheme is http or https
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return false
+	}
+
+	// Ignore URLs with fragments (like "#section")
+	if parsedURL.Fragment != "" {
+		return false
+	}
+
+	// Skip common file types that aren't web pages
+	extensions := []string{
+		".jpg", ".jpeg", ".png", ".gif", ".pdf", ".doc", ".docx",
+		".xls", ".xlsx", ".zip", ".tar", ".gz", ".mp3", ".mp4",
+	}
+
+	lowerPath := strings.ToLower(parsedURL.Path)
+	for _, ext := range extensions {
+		if strings.HasSuffix(lowerPath, ext) {
+			return false
+		}
+	}
+
+	return true
+}
+```
+
+## Running the Crawler
+
+To run the crawler, execute:
+
+```bash
+go run cmd/crawler/main.go -w 10 -d 3 https://example.com
+```
+
+Options:
+- `-w, --workers`: Number of concurrent workers (default: 5)
+- `-d, --depth`: Maximum crawl depth (default: 3)
+- `-r, --retries`: Maximum retry attempts (default: 3)
+- `-t, --timeout`: Timeout for the entire operation (default: 5m)
+- `-R, --respect-robots`: Respect robots.txt rules (default: true)
+- `-D, --domains`: Allowed domains (default: only starting domain)
+- `-l, --delay`: Delay between requests in milliseconds (default: 200)

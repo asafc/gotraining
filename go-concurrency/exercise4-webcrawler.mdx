@@ -1,0 +1,70 @@
+---
+title: "Exercise 4: Web Crawler"
+---
+
+In this exercise, you'll build a concurrent web crawler in Go using the **Colly** library.
+This project will help you practice implementing concurrency patterns, error handling, and proper project structure in Go.
+
+## Objectives
+
+Create a command-line web crawler that:
+
+1. Uses the Colly library as the foundation
+2. Implements a worker pool pattern with configurable concurrency
+3. Uses channels to communicate between components
+4. Handles errors and implements a retry mechanism
+5. Supports depth-limited crawling
+6. Detects and avoids cycles (infinite loops)
+7. Implements proper cancellation and timeout handling with contexts
+8. Uses Cobra for the command-line interface
+
+## Project Structure
+
+```
+webcrawler/
+├── cmd/
+│   └── crawler/
+│       └── main.go
+├── internal/
+│   ├── crawler/
+│   │   ├── crawler.go
+│   │   ├── worker.go
+│   │   └── queue.go
+│   └── utils/
+│       └── url.go
+├── pkg/
+│   └── config/
+│       └── config.go
+├── go.mod
+└── go.sum
+```
+
+## Requirements
+
+1. The crawler should accept a starting URL and crawl pages up to a specified depth.
+2. It should respect robots.txt rules.
+3. It should implement concurrency limits to avoid overwhelming target servers.
+4. It should detect and avoid revisiting the same URLs.
+5. It should handle errors gracefully with configurable retry logic.
+6. It should provide clear logging of its activities.
+7. It should support timeouts and graceful cancellation.
+8. It should be configurable via command-line flags.
+
+## Getting Started
+
+1. Initialize the Go module:
+   ```bash
+   mkdir -p webcrawler
+   cd webcrawler
+   go mod init github.com/yourusername/webcrawler
+   ```
+
+2. Install required dependencies:
+   ```bash
+   go get -u github.com/gocolly/colly/v2
+   go get -u github.com/spf13/cobra
+   ```
+
+3. Follow the project structure and implement each component.
+
+Good luck!
