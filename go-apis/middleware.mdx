@@ -1,3 +1,578 @@
 ---
-title: Middlewares
+title: Middleware
 ---
+
+Middleware functions are a powerful feature in Gin that allow you to process requests before they reach your route handlers and after responses are generated. In this chapter, we'll explore how middleware works in Gin and implement some useful middleware components.
+
+## What is Middleware?
+
+Middleware:
+- Sits between the client and your route handlers
+- Can execute logic before and after the actual handler
+- Can modify the request or response
+- Can terminate the request-response cycle early
+- Can be applied globally, to groups, or to specific routes
+
+## Middleware Flow in Gin
+
+Gin uses a middleware chain where:
+1. Each middleware can call `c.Next()` to pass control to the next middleware
+2. After the last middleware calls `c.Next()`, the actual route handler executes
+3. Control flows back up the chain in reverse order
+4. Middleware can perform actions after `c.Next()` returns
+
+```
+Client → Middleware 1 → Middleware 2 → Route Handler → Middleware 2 → Middleware 1 → Client
+```
+
+## Built-in Middleware
+
+Gin comes with several built-in middleware functions:
+
+- `gin.Logger()`: Logs request details
+- `gin.Recovery()`: Recovers from panics and returns 500 error
+- `gin.Default()`: Uses both Logger and Recovery middleware
+
+When you call `gin.Default()`, you're automatically using these two middleware components.
+
+## Creating Custom Middleware
+
+Let's create some practical custom middleware for our books API:
+
+### 1. Request Logger Middleware
+
+```go
+func requestLogger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Start timer
+		startTime := time.Now()
+		
+		// Process request
+		c.Next()
+		
+		// Calculate latency
+		latency := time.Since(startTime)
+		
+		// Get request details
+		path := c.Request.URL.Path
+		method := c.Request.Method
+		clientIP := c.ClientIP()
+		statusCode := c.Writer.Status()
+		
+		// Log request
+		log.Printf("[%s] %d | %v | %s | %s | %s",
+			method, statusCode, latency, clientIP, path, c.Errors.String())
+	}
+}
+```
+
+### 2. CORS Middleware
+
+```go
+func corsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
+		
+		// Handle preflight requests
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		
+		c.Next()
+	}
+}
+```
+
+### 3. Rate Limiter Middleware
+
+```go
+func rateLimiter(limit int, windowSec int) gin.HandlerFunc {
+	// Create a map to store IP addresses and their request counts
+	ipRequestMap := make(map[string][]time.Time)
+	var mu sync.Mutex
+	
+	return func(c *gin.Context) {
+		ip := c.ClientIP()
+		
+		mu.Lock()
+		
+		// Create a slice for this IP if it doesn't exist
+		if _, exists := ipRequestMap[ip]; !exists {
+			ipRequestMap[ip] = make([]time.Time, 0)
+		}
+		
+		// Remove outdated requests
+		now := time.Now()
+		windowStart := now.Add(-time.Duration(windowSec) * time.Second)
+		
+		var validRequests []time.Time
+		for _, requestTime := range ipRequestMap[ip] {
+			if requestTime.After(windowStart) {
+				validRequests = append(validRequests, requestTime)
+			}
+		}
+		
+		ipRequestMap[ip] = validRequests
+		
+		// Check if we're over the limit
+		if len(ipRequestMap[ip]) >= limit {
+			mu.Unlock()
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"status":  429,
+				"message": "Rate limit exceeded",
+				"error":   "Too many requests, please try again later",
+			})
+			c.Abort()
+			return
+		}
+		
+		// Add current request to the list
+		ipRequestMap[ip] = append(ipRequestMap[ip], now)
+		
+		mu.Unlock()
+		
+		c.Next()
+	}
+}
+```
+
+### 4. Request ID Middleware
+
+```go
+func requestIDMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Get request ID from header or generate a new one
+		requestID := c.Request.Header.Get("X-Request-ID")
+		if requestID == "" {
+			requestID = uuid.New().String()
+		}
+		
+		// Set request ID in context and header
+		c.Set("RequestID", requestID)
+		c.Writer.Header().Set("X-Request-ID", requestID)
+		
+		c.Next()
+	}
+}
+```
+
+## Applying Middleware
+
+You can apply middleware in three ways:
+
+### 1. Global Middleware
+
+Applied to all routes:
+
+```go
+router := gin.New() // Create without default middleware
+router.Use(requestLogger())
+router.Use(corsMiddleware())
+```
+
+### 2. Group Middleware
+
+Applied to a specific group of routes:
+
+```go
+api := router.Group("/api")
+api.Use(authMiddleware())
+{
+    api.GET("/books", getBooks)
+    // ...
+}
+```
+
+### 3. Route-Specific Middleware
+
+Applied to a single route:
+
+```go
+router.GET("/admin", authMiddleware(), adminHandler)
+```
+
+## Complete API with Middleware Example
+
+Let's put it all together with a complete API example using our custom middleware:
+
+```go
+package main
+
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"log"
+	"net/http"
+	"sync"
+	"time"
+)
+
+// Book represents a book resource
+type Book struct {
+	ID     string  `json:"id"`
+	Title  string  `json:"title" binding:"required"`
+	Author string  `json:"author" binding:"required"`
+	Price  float64 `json:"price" binding:"required,gte=0"`
+}
+
+// Our in-memory "database" of books
+var books = []Book{
+	{ID: "1", Title: "The Go Programming Language", Author: "Alan Donovan & Brian Kernighan", Price: 31.99},
+	{ID: "2", Title: "Concurrency in Go", Author: "Katherine Cox-Buday", Price: 34.99},
+	{ID: "3", Title: "Go in Action", Author: "William Kennedy", Price: 29.99},
+}
+
+// Request Logger Middleware
+func requestLogger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Start timer
+		startTime := time.Now()
+		
+		// Get request ID
+		requestID := c.GetString("RequestID")
+		if requestID == "" {
+			requestID = "unknown"
+		}
+		
+		// Process request
+		c.Next()
+		
+		// Calculate latency
+		latency := time.Since(startTime)
+		
+		// Get request details
+		path := c.Request.URL.Path
+		method := c.Request.Method
+		clientIP := c.ClientIP()
+		statusCode := c.Writer.Status()
+		
+		// Log request
+		log.Printf("[%s] %s | %d | %v | %s | %s | Errors: %s",
+			requestID, method, statusCode, latency, clientIP, path, c.Errors.String())
+	}
+}
+
+// CORS Middleware
+func corsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, X-Request-ID")
+		
+		// Handle preflight requests
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		
+		c.Next()
+	}
+}
+
+// Rate Limiter Middleware
+func rateLimiter(limit int, windowSec int) gin.HandlerFunc {
+	// Create a map to store IP addresses and their request counts
+	ipRequestMap := make(map[string][]time.Time)
+	var mu sync.Mutex
+	
+	return func(c *gin.Context) {
+		ip := c.ClientIP()
+		
+		mu.Lock()
+		
+		// Create a slice for this IP if it doesn't exist
+		if _, exists := ipRequestMap[ip]; !exists {
+			ipRequestMap[ip] = make([]time.Time, 0)
+		}
+		
+		// Remove outdated requests
+		now := time.Now()
+		windowStart := now.Add(-time.Duration(windowSec) * time.Second)
+		
+		var validRequests []time.Time
+		for _, requestTime := range ipRequestMap[ip] {
+			if requestTime.After(windowStart) {
+				validRequests = append(validRequests, requestTime)
+			}
+		}
+		
+		ipRequestMap[ip] = validRequests
+		
+		// Check if we're over the limit
+		if len(ipRequestMap[ip]) >= limit {
+			mu.Unlock()
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"status":  429,
+				"message": "Rate limit exceeded",
+				"error":   "Too many requests, please try again later",
+			})
+			c.Abort()
+			return
+		}
+		
+		// Add current request to the list
+		ipRequestMap[ip] = append(ipRequestMap[ip], now)
+		
+		mu.Unlock()
+		
+		c.Next()
+	}
+}
+
+// Request ID Middleware
+func requestIDMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Get request ID from header or generate a new one
+		requestID := c.Request.Header.Get("X-Request-ID")
+		if requestID == "" {
+			requestID = uuid.New().String()
+		}
+		
+		// Set request ID in context and header
+		c.Set("RequestID", requestID)
+		c.Writer.Header().Set("X-Request-ID", requestID)
+		
+		c.Next()
+	}
+}
+
+// Authentication Middleware
+func authMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		apiKey := c.GetHeader("X-API-Key")
+		
+		// Check if API key is provided
+		if apiKey == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"status":  http.StatusUnauthorized,
+				"message": "Authentication required",
+			})
+			c.Abort()
+			return
+		}
+		
+		// Check if API key is valid (in a real app, you'd check against a database)
+		if apiKey != "valid-api-key" && apiKey != "admin-api-key" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"status":  http.StatusUnauthorized,
+				"message": "Invalid API key",
+			})
+			c.Abort()
+			return
+		}
+		
+		// Check for admin privileges
+		if apiKey == "admin-api-key" {
+			c.Set("IsAdmin", true)
+		} else {
+			c.Set("IsAdmin", false)
+		}
+		
+		// Authentication successful, continue
+		c.Next()
+	}
+}
+
+// Admin-only Middleware
+func adminOnly() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		isAdmin, exists := c.Get("IsAdmin")
+		if !exists || !isAdmin.(bool) {
+			c.JSON(http.StatusForbidden, gin.H{
+				"status":  http.StatusForbidden,
+				"message": "Admin access required",
+			})
+			c.Abort()
+			return
+		}
+		
+		c.Next()
+	}
+}
+
+func main() {
+	// Create a new router without default middleware
+	router := gin.New()
+	
+	// Add global middleware
+	router.Use(gin.Recovery())         // Recover from panics
+	router.Use(requestIDMiddleware())  // Generate request IDs
+	router.Use(requestLogger())        // Log all requests
+	router.Use(corsMiddleware())       // Handle CORS
+	router.Use(rateLimiter(100, 60))   // Rate limit: 100 requests per minute
+	
+	// Public routes group
+	public := router.Group("/api")
+	{
+		public.GET("/ping", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{
+				"message": "pong",
+				"requestID": c.GetString("RequestID"),
+			})
+		})
+		
+		public.GET("/books", getBooks)
+	}
+	
+	// Protected routes group
+	protected := router.Group("/api")
+	protected.Use(authMiddleware()) // Apply auth middleware
+	{
+		protected.GET("/books/:id", getBookByID)
+		protected.POST("/books", createBook)
+		protected.PUT("/books/:id", updateBook)
+		protected.DELETE("/books/:id", deleteBook)
+	}
+	
+	// Admin routes group
+	admin := router.Group("/api/admin")
+	admin.Use(authMiddleware(), adminOnly()) // Apply auth and admin middleware
+	{
+		admin.GET("/stats", getStats)
+	}
+	
+	// Handle 404 for undefined routes
+	router.NoRoute(func(c *gin.Context) {
+		c.JSON(http.StatusNotFound, gin.H{
+			"status":  http.StatusNotFound,
+			"message": "Resource not found",
+		})
+	})
+	
+	router.Run(":8080")
+}
+
+// Route handlers (same as in previous chapters)
+func getBooks(c *gin.Context) {
+	c.JSON(http.StatusOK, books)
+}
+
+func getBookByID(c *gin.Context) {
+	id := c.Param("id")
+
+	for _, book := range books {
+		if book.ID == id {
+			c.JSON(http.StatusOK, book)
+			return
+		}
+	}
+
+	c.JSON(http.StatusNotFound, gin.H{
+		"status":  http.StatusNotFound,
+		"message": "Book not found",
+	})
+}
+
+func createBook(c *gin.Context) {
+	var newBook Book
+
+	if err := c.ShouldBindJSON(&newBook); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"status":  http.StatusBadRequest,
+			"message": "Invalid book data",
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	// Generate ID if not provided
+	if newBook.ID == "" {
+		newBook.ID = uuid.New().String()
+	}
+
+	// Check for duplicates
+	for _, book := range books {
+		if book.ID == newBook.ID {
+			c.JSON(http.StatusConflict, gin.H{
+				"status":  http.StatusConflict,
+				"message": "Book with this ID already exists",
+			})
+			return
+		}
+	}
+
+	books = append(books, newBook)
+	c.JSON(http.StatusCreated, newBook)
+}
+
+func updateBook(c *gin.Context) {
+	id := c.Param("id")
+	var updatedBook Book
+
+	if err := c.ShouldBindJSON(&updatedBook); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"status":  http.StatusBadRequest,
+			"message": "Invalid book data",
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	for i, book := range books {
+		if book.ID == id {
+			updatedBook.ID = id
+			books[i] = updatedBook
+			c.JSON(http.StatusOK, updatedBook)
+			return
+		}
+	}
+
+	c.JSON(http.StatusNotFound, gin.H{
+		"status":  http.StatusNotFound,
+		"message": "Book not found",
+	})
+}
+
+func deleteBook(c *gin.Context) {
+	id := c.Param("id")
+
+	for i, book := range books {
+		if book.ID == id {
+			books = append(books[:i], books[i+1:]...)
+			c.JSON(http.StatusOK, gin.H{
+				"status":  http.StatusOK,
+				"message": "Book deleted successfully",
+			})
+			return
+		}
+	}
+
+	c.JSON(http.StatusNotFound, gin.H{
+		"status":  http.StatusNotFound,
+		"message": "Book not found",
+	})
+}
+
+func getStats(c *gin.Context) {
+	// Calculate simple stats
+	totalBooks := len(books)
+	var totalValue float64
+	for _, book := range books {
+		totalValue += book.Price
+	}
+	
+	c.JSON(http.StatusOK, gin.H{
+		"total_books": totalBooks,
+		"total_value": totalValue,
+		"average_price": totalValue / float64(totalBooks),
+		"request_id": c.GetString("RequestID"),
+	})
+}
+```
+
+In this chapter, we've learned:
+- What middleware is and how it works in Gin
+- The middleware flow in Gin applications
+- How to create custom middleware for:
+  - Request logging
+  - CORS handling
+  - Rate limiting
+  - Request ID tracking
+  - Authentication and authorization
+- How to apply middleware globally, to groups, or specific routes
+- How to chain multiple middleware functions
+
+In the next chapter, we'll put everything together in an exercise to build a complete Todo app REST API.

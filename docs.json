@@ -49,12 +49,20 @@
               "go-apis/rest",
               "go-apis/errors",
               "go-apis/middleware",
-              "go-apis/exercise"
+              "go-apis/exercise",
+              "go-apis/solution"
             ]
           },
           {
             "group": "Writing Kubernetes Operators",
-            "pages": ["k8s-operators/operator-101"]
+            "pages": [
+              "k8s-operators/operator-101",
+              "k8s-operators/controllers",
+              "k8s-operators/devenv",
+              "k8s-operators/CRDs",
+              "k8s-operators/simple-operator",
+              "k8s-operators/k8s-api"
+            ]
           },
           {
             "group": "Crossplane",

@@ -1,3 +1,72 @@
 ---
-title: Signals
+title: "Exercise 5: Todos API"
 ---
+
+In this exercise, you'll implement a complete Todo application REST API using Gin and SQLite. This will help you apply everything you've learned so far about building APIs with Gin.
+
+## Requirements
+
+Build a Todo API with the following features:
+
+1. **Data Storage**: 
+   - Use SQLite3 as a database (not in-memory data structures)
+   - Use GORM as the ORM to interact with the database
+
+2. **API Endpoints**:
+   - Create a new todo
+   - Get all todos
+   - Get a specific todo by ID
+   - Update a todo
+   - Delete a todo
+   - Mark a todo as completed
+
+3. **User Authentication**:
+   - Register new users
+   - Login and return JWT tokens
+   - Protect todo routes with authentication
+
+4. **Middleware**:
+   - Implement logging middleware
+   - Implement authentication middleware
+
+5. **Project Structure**:
+   - Split your code into multiple files for better organization
+   - Use proper error handling
+   - Follow REST best practices
+
+## Getting Started
+
+1. Create a new Go module:
+   ```bash
+   mkdir todo-api
+   cd todo-api
+   go mod init todo-api
+   ```
+
+2. Install the required dependencies:
+   ```bash
+   go get -u github.com/gin-gonic/gin
+   go get -u gorm.io/gorm
+   go get -u gorm.io/driver/sqlite
+   go get -u github.com/golang-jwt/jwt/v4
+   go get -u golang.org/x/crypto/bcrypt
+   ```
+
+3. Structure your project with these files:
+   - `main.go` - The entry point of your application
+   - `models/` - Directory for your database models
+   - `handlers/` - Directory for your API handlers
+   - `middleware/` - Directory for middleware components
+   - `routes/` - Directory for route definitions
+   - `db/` - Directory for database setup
+
+## Bonus Challenges
+
+If you finish the main requirements, try these additional challenges:
+
+1. Add pagination for the "get all todos" endpoint
+2. Implement filtering by completion status
+3. Add due dates to todos and allow sorting by due date
+4. Add the ability to organize todos with labels or categories
+
+Good luck! Use the concepts we've covered in previous chapters to build a clean, well-structured API.

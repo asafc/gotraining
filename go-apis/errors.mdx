@@ -1,3 +1,736 @@
 ---
-title: Errors
+title: Handling API Errors
 ---
+
+Error handling is a critical aspect of building robust APIs. In this chapter, we'll explore how to properly handle errors in a Gin application, using appropriate HTTP status codes and response formats.
+
+## Introduction to API Error Handling
+
+When building APIs, it's important to:
+1. Use appropriate HTTP status codes
+2. Return consistent error response formats
+3. Provide meaningful error messages
+4. Handle both expected and unexpected errors
+
+## HTTP Status Codes
+
+Here are some common HTTP status codes you should use in your APIs:
+
+- **2xx Success**
+  - 200 OK: Request succeeded
+  - 201 Created: Resource created successfully
+  - 204 No Content: Success but no response body (often used for DELETE)
+
+- **4xx Client Errors**
+  - 400 Bad Request: Invalid request format/syntax
+  - 401 Unauthorized: Authentication required
+  - 403 Forbidden: Authentication succeeded but access denied
+  - 404 Not Found: Resource not found
+  - 422 Unprocessable Entity: Validation errors
+
+- **5xx Server Errors**
+  - 500 Internal Server Error: Unexpected server error
+  - 503 Service Unavailable: Server temporarily unavailable
+
+## Creating a Consistent Error Response Format
+
+Let's define a standard error response format for our API:
+
+```go
+// ErrorResponse represents an error response returned to the client
+type ErrorResponse struct {
+	Status  int    `json:"status"`
+	Message string `json:"message"`
+	Error   string `json:"error,omitempty"`
+}
+```
+
+## Custom Error Handling in Gin
+
+Let's implement custom error handling in our books API:
+
+```go
+package main
+
+import (
+	"errors"
+	"github.com/gin-gonic/gin"
+	"net/http"
+	"strconv"
+)
+
+// Book represents a book resource in our API
+type Book struct {
+	ID     string  `json:"id"`
+	Title  string  `json:"title" binding:"required"`
+	Author string  `json:"author" binding:"required"`
+	Price  float64 `json:"price" binding:"required,gte=0"`
+}
+
+// ErrorResponse represents a standard error response
+type ErrorResponse struct {
+	Status  int    `json:"status"`
+	Message string `json:"message"`
+	Error   string `json:"error,omitempty"`
+}
+
+// Our in-memory "database" of books
+var books = []Book{
+	{ID: "1", Title: "The Go Programming Language", Author: "Alan Donovan & Brian Kernighan", Price: 31.99},
+	{ID: "2", Title: "Concurrency in Go", Author: "Katherine Cox-Buday", Price: 34.99},
+	{ID: "3", Title: "Go in Action", Author: "William Kennedy", Price: 29.99},
+}
+
+// Custom errors
+var (
+	ErrBookNotFound   = errors.New("book not found")
+	ErrInvalidID      = errors.New("invalid book ID")
+	ErrBookExists     = errors.New("book with this ID already exists")
+	ErrInvalidPrice   = errors.New("price must be a positive number")
+	ErrRequiredFields = errors.New("title, author, and price are required fields")
+)
+
+func main() {
+	router := gin.Default()
+
+	// Create a group for our API routes
+	api := router.Group("/api")
+	{
+		// Routes for the books resource
+		api.GET("/books", getBooks)
+		api.GET("/books/:id", getBookByID)
+		api.POST("/books", createBook)
+		api.PUT("/books/:id", updateBook)
+		api.DELETE("/books/:id", deleteBook)
+	}
+
+	// Add a NoRoute handler for 404 errors
+	router.NoRoute(func(c *gin.Context) {
+		c.JSON(http.StatusNotFound, ErrorResponse{
+			Status:  http.StatusNotFound,
+			Message: "Resource not found",
+		})
+	})
+
+	router.Run(":8080")
+}
+
+// respondWithError is a helper function to return an error response
+func respondWithError(c *gin.Context, code int, message string, err error) {
+	response := ErrorResponse{
+		Status:  code,
+		Message: message,
+	}
+	
+	// Only include the error detail in non-production environments
+	if err != nil && gin.Mode() != gin.ReleaseMode {
+		response.Error = err.Error()
+	}
+	
+	c.JSON(code, response)
+	c.Abort() // Stop further handlers from executing
+}
+
+// getBooks responds with the list of all books as JSON
+func getBooks(c *gin.Context) {
+	c.JSON(http.StatusOK, books)
+}
+
+// getBookByID locates the book whose ID matches the id parameter
+func getBookByID(c *gin.Context) {
+	id := c.Param("id")
+
+	// Validate ID
+	if id == "" {
+		respondWithError(c, http.StatusBadRequest, "Invalid book ID", ErrInvalidID)
+		return
+	}
+
+	// Loop through the list of books, looking for a match
+	for _, book := range books {
+		if book.ID == id {
+			c.JSON(http.StatusOK, book)
+			return
+		}
+	}
+
+	// Book not found
+	respondWithError(c, http.StatusNotFound, "Book not found", ErrBookNotFound)
+}
+
+// createBook adds a new book from JSON received in the request body
+func createBook(c *gin.Context) {
+	var newBook Book
+
+	// Call BindJSON to bind the received JSON to newBook
+	if err := c.ShouldBindJSON(&newBook); err != nil {
+		respondWithError(c, http.StatusBadRequest, "Invalid book data", err)
+		return
+	}
+
+	// Check required fields
+	if newBook.Title == "" || newBook.Author == "" || newBook.Price < 0 {
+		respondWithError(c, http.StatusBadRequest, "Missing required fields", ErrRequiredFields)
+		return
+	}
+	
+	// Generate a new ID if not provided
+	if newBook.ID == "" {
+		newBook.ID = strconv.Itoa(len(books) + 1)
+	}
+
+	// Check if book with this ID already exists
+	for _, book := range books {
+		if book.ID == newBook.ID {
+			respondWithError(c, http.StatusConflict, "Book with this ID already exists", ErrBookExists)
+			return
+		}
+	}
+
+	// Add the new book to the slice
+	books = append(books, newBook)
+	
+	// Return the new book with a 201 Created status
+	c.JSON(http.StatusCreated, newBook)
+}
+
+// updateBook updates a book with the specified ID
+func updateBook(c *gin.Context) {
+	id := c.Param("id")
+	var updatedBook Book
+
+	// Validate ID
+	if id == "" {
+		respondWithError(c, http.StatusBadRequest, "Invalid book ID", ErrInvalidID)
+		return
+	}
+
+	// Call BindJSON to bind the received JSON to updatedBook
+	if err := c.ShouldBindJSON(&updatedBook); err != nil {
+		respondWithError(c, http.StatusBadRequest, "Invalid book data", err)
+		return
+	}
+
+	// Check required fields
+	if updatedBook.Title == "" || updatedBook.Author == "" || updatedBook.Price < 0 {
+		respondWithError(c, http.StatusBadRequest, "Missing required fields", ErrRequiredFields)
+		return
+	}
+
+	// Loop through the books, looking for the one to update
+	for i, book := range books {
+		if book.ID == id {
+			// Update the book
+			updatedBook.ID = id // Ensure the ID doesn't change
+			books[i] = updatedBook
+			c.JSON(http.StatusOK, updatedBook)
+			return
+		}
+	}
+
+	// Book not found
+	respondWithError(c, http.StatusNotFound, "Book not found", ErrBookNotFound)
+}
+
+// deleteBook removes a book with the specified ID
+func deleteBook(c *gin.Context) {
+	id := c.Param("id")
+
+	// Validate ID
+	if id == "" {
+		respondWithError(c, http.StatusBadRequest, "Invalid book ID", ErrInvalidID)
+		return
+	}
+
+	// Loop through the books, looking for the one to delete
+	for i, book := range books {
+		if book.ID == id {
+			// Remove the book by appending books before this one and after this one
+			books = append(books[:i], books[i+1:]...)
+			c.JSON(http.StatusOK, gin.H{"message": "Book deleted successfully"})
+			return
+		}
+	}
+
+	// Book not found
+	respondWithError(c, http.StatusNotFound, "Book not found", ErrBookNotFound)
+}
+```
+
+Key improvements in this version:
+
+1. We've defined a standard `ErrorResponse` struct
+2. We've created custom error types for common error scenarios
+3. We've added a helper function `respondWithError` for error responses
+4. We've added validation for incoming data
+5. We've used `ShouldBindJSON` instead of `BindJSON` for better error handling
+6. We've added a `NoRoute` handler for 404 errors
+7. We're conditionally showing error details based on the environment
+
+## Handling Authentication Errors
+
+Let's add a simple authentication mechanism to demonstrate how to handle 401/403 errors:
+
+```go
+package main
+
+import (
+	"errors"
+	"github.com/gin-gonic/gin"
+	"net/http"
+	"strings"
+)
+
+// Add to your existing error types
+var (
+	ErrUnauthorized     = errors.New("authentication required")
+	ErrInvalidAPIKey    = errors.New("invalid API key")
+	ErrPermissionDenied = errors.New("permission denied")
+)
+
+// Simple authentication middleware
+func authMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		apiKey := c.GetHeader("X-API-Key")
+		
+		// Check if API key is provided
+		if apiKey == "" {
+			respondWithError(c, http.StatusUnauthorized, "Authentication required", ErrUnauthorized)
+			return
+		}
+		
+		// Check if API key is valid (in a real app, you'd check against a database)
+		if apiKey != "valid-api-key" {
+			respondWithError(c, http.StatusUnauthorized, "Invalid API key", ErrInvalidAPIKey)
+			return
+		}
+		
+		// Example of role-based authorization
+		if strings.HasPrefix(c.FullPath(), "/api/admin") {
+			// Check if user has admin role (simplified example)
+			isAdmin := (apiKey == "admin-api-key")
+			if !isAdmin {
+				respondWithError(c, http.StatusForbidden, "Admin access required", ErrPermissionDenied)
+				return
+			}
+		}
+		
+		// Authentication successful, continue
+		c.Next()
+	}
+}
+
+// In your main() function, you would apply this middleware:
+func main() {
+	router := gin.Default()
+
+	// Public routes
+	public := router.Group("/api/public")
+	{
+		public.GET("/books", getBooks) // No auth required
+	}
+
+	// Protected routes
+	protected := router.Group("/api")
+	protected.Use(authMiddleware()) // Apply auth middleware
+	{
+		protected.GET("/books/:id", getBookByID)
+		protected.POST("/books", createBook)
+		protected.PUT("/books/:id", updateBook)
+		protected.DELETE("/books/:id", deleteBook)
+	}
+
+	// Admin routes (require admin role)
+	admin := router.Group("/api/admin")
+	admin.Use(authMiddleware()) // Apply same auth middleware
+	{
+		admin.GET("/stats", getAdminStats)
+	}
+
+	router.Run(":8080")
+}
+
+// Example admin endpoint
+func getAdminStats(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"total_books": len(books),
+		"total_value": calculateTotalValue(),
+	})
+}
+
+func calculateTotalValue() float64 {
+	var total float64
+	for _, book := range books {
+		total += book.Price
+	}
+	return total
+}
+```
+
+## Handling Validation Errors
+
+Gin has built-in support for request validation through the validator package. Let's enhance our book validation:
+
+```go
+package main
+
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
+	"net/http"
+	"strings"
+)
+
+// Book with enhanced validation tags
+type Book struct {
+	ID     string  `json:"id"`
+	Title  string  `json:"title" binding:"required,min=1,max=100"`
+	Author string  `json:"author" binding:"required,min=1,max=100"`
+	Price  float64 `json:"price" binding:"required,gte=0"`
+	ISBN   string  `json:"isbn" binding:"omitempty,isbn10|isbn13"`
+	Genre  string  `json:"genre" binding:"required,oneof=fiction non-fiction science biography history"`
+}
+
+// Function to extract validation errors
+func getValidationErrors(err error) map[string]string {
+	errors := make(map[string]string)
+	
+	// Extract validation errors
+	if validationErrors, ok := err.(validator.ValidationErrors); ok {
+		for _, e := range validationErrors {
+			// Convert the field name to lowercase for the first character
+			field := strings.ToLower(e.Field()[0:1]) + e.Field()[1:]
+			
+			switch e.Tag() {
+			case "required":
+				errors[field] = field + " is required"
+			case "min":
+				errors[field] = field + " must be at least " + e.Param() + " characters long"
+			case "max":
+				errors[field] = field + " must be at most " + e.Param() + " characters long"
+			case "gte":
+				errors[field] = field + " must be greater than or equal to " + e.Param()
+			case "oneof":
+				errors[field] = field + " must be one of: " + e.Param()
+			case "isbn10", "isbn13":
+				errors[field] = field + " must be a valid ISBN"
+			default:
+				errors[field] = field + " failed validation: " + e.Tag()
+			}
+		}
+		return errors
+	}
+	
+	// If it's not a validation error, return a generic error
+	errors["message"] = err.Error()
+	return errors
+}
+
+// Enhanced error handler for validation errors
+func respondWithValidationError(c *gin.Context, err error) {
+	c.JSON(http.StatusBadRequest, gin.H{
+		"status":  http.StatusBadRequest,
+		"message": "Validation failed",
+		"errors":  getValidationErrors(err),
+	})
+	c.Abort()
+}
+
+// In your handlers, you would use it like this:
+func createBook(c *gin.Context) {
+	var newBook Book
+
+	if err := c.ShouldBindJSON(&newBook); err != nil {
+		respondWithValidationError(c, err)
+		return
+	}
+	
+	// Rest of your handler...
+}
+```
+
+## Complete Working Example
+
+Here's a complete example incorporating proper error handling:
+
+```go
+package main
+
+import (
+	"errors"
+	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
+	"net/http"
+	"strconv"
+	"strings"
+)
+
+// Book represents a book resource with validation
+type Book struct {
+	ID     string  `json:"id"`
+	Title  string  `json:"title" binding:"required,min=1,max=100"`
+	Author string  `json:"author" binding:"required,min=1,max=100"`
+	Price  float64 `json:"price" binding:"required,gte=0"`
+	Genre  string  `json:"genre" binding:"required,oneof=fiction non-fiction science biography history"`
+}
+
+// ErrorResponse represents a standard error response
+type ErrorResponse struct {
+	Status  int         `json:"status"`
+	Message string      `json:"message"`
+	Error   string      `json:"error,omitempty"`
+	Details interface{} `json:"details,omitempty"`
+}
+
+// Our in-memory "database" of books
+var books = []Book{
+	{ID: "1", Title: "The Go Programming Language", Author: "Alan Donovan & Brian Kernighan", Price: 31.99, Genre: "science"},
+	{ID: "2", Title: "Concurrency in Go", Author: "Katherine Cox-Buday", Price: 34.99, Genre: "science"},
+	{ID: "3", Title: "Go in Action", Author: "William Kennedy", Price: 29.99, Genre: "science"},
+}
+
+// Custom errors
+var (
+	ErrBookNotFound     = errors.New("book not found")
+	ErrInvalidID        = errors.New("invalid book ID")
+	ErrBookExists       = errors.New("book with this ID already exists")
+	ErrRequiredFields   = errors.New("missing required fields")
+	ErrUnauthorized     = errors.New("authentication required")
+	ErrInvalidAPIKey    = errors.New("invalid API key")
+	ErrPermissionDenied = errors.New("permission denied")
+)
+
+func main() {
+	// Set Gin to release mode for production
+	// gin.SetMode(gin.ReleaseMode)
+	
+	router := gin.Default()
+
+	// Public routes
+	public := router.Group("/api")
+	{
+		public.GET("/books", getBooks) // No auth required
+	}
+
+	// Protected routes
+	protected := router.Group("/api")
+	protected.Use(authMiddleware()) // Apply auth middleware
+	{
+		protected.GET("/books/:id", getBookByID)
+		protected.POST("/books", createBook)
+		protected.PUT("/books/:id", updateBook)
+		protected.DELETE("/books/:id", deleteBook)
+	}
+
+	// Add a NoRoute handler for 404 errors
+	router.NoRoute(func(c *gin.Context) {
+		respondWithError(c, http.StatusNotFound, "Resource not found", nil)
+	})
+
+	router.Run(":8080")
+}
+
+// Simple authentication middleware
+func authMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		apiKey := c.GetHeader("X-API-Key")
+		
+		// Check if API key is provided
+		if apiKey == "" {
+			respondWithError(c, http.StatusUnauthorized, "Authentication required", ErrUnauthorized)
+			return
+		}
+		
+		// Check if API key is valid (in a real app, you'd check against a database)
+		if apiKey != "valid-api-key" && apiKey != "admin-api-key" {
+			respondWithError(c, http.StatusUnauthorized, "Invalid API key", ErrInvalidAPIKey)
+			return
+		}
+		
+		// Authentication successful, continue
+		c.Next()
+	}
+}
+
+// respondWithError is a helper function to return an error response
+func respondWithError(c *gin.Context, code int, message string, err error) {
+	response := ErrorResponse{
+		Status:  code,
+		Message: message,
+	}
+	
+	// Only include the error detail in non-production environments
+	if err != nil && gin.Mode() != gin.ReleaseMode {
+		response.Error = err.Error()
+	}
+	
+	c.JSON(code, response)
+	c.Abort() // Stop further handlers from executing
+}
+
+// Function to extract validation errors
+func getValidationErrors(err error) map[string]string {
+	errors := make(map[string]string)
+	
+	// Extract validation errors
+	if validationErrors, ok := err.(validator.ValidationErrors); ok {
+		for _, e := range validationErrors {
+			// Convert the field name to lowercase for the first character
+			field := strings.ToLower(e.Field()[0:1]) + e.Field()[1:]
+			
+			switch e.Tag() {
+			case "required":
+				errors[field] = field + " is required"
+			case "min":
+				errors[field] = field + " must be at least " + e.Param() + " characters long"
+			case "max":
+				errors[field] = field + " must be at most " + e.Param() + " characters long"
+			case "gte":
+				errors[field] = field + " must be greater than or equal to " + e.Param()
+			case "oneof":
+				errors[field] = field + " must be one of: " + e.Param()
+			default:
+				errors[field] = field + " failed validation: " + e.Tag()
+			}
+		}
+		return errors
+	}
+	
+	// If it's not a validation error, return a generic error
+	errors["message"] = err.Error()
+	return errors
+}
+
+// Enhanced error handler for validation errors
+func respondWithValidationError(c *gin.Context, err error) {
+	c.JSON(http.StatusBadRequest, ErrorResponse{
+		Status:  http.StatusBadRequest,
+		Message: "Validation failed",
+		Details: getValidationErrors(err),
+	})
+	c.Abort()
+}
+
+// getBooks responds with the list of all books as JSON
+func getBooks(c *gin.Context) {
+	c.JSON(http.StatusOK, books)
+}
+
+// getBookByID locates the book whose ID matches the id parameter
+func getBookByID(c *gin.Context) {
+	id := c.Param("id")
+
+	// Validate ID
+	if id == "" {
+		respondWithError(c, http.StatusBadRequest, "Invalid book ID", ErrInvalidID)
+		return
+	}
+
+	// Loop through the list of books, looking for a match
+	for _, book := range books {
+		if book.ID == id {
+			c.JSON(http.StatusOK, book)
+			return
+		}
+	}
+
+	// Book not found
+	respondWithError(c, http.StatusNotFound, "Book not found", ErrBookNotFound)
+}
+
+// createBook adds a new book from JSON received in the request body
+func createBook(c *gin.Context) {
+	var newBook Book
+
+	// Call ShouldBindJSON to bind the received JSON to newBook
+	if err := c.ShouldBindJSON(&newBook); err != nil {
+		respondWithValidationError(c, err)
+		return
+	}
+	
+	// Generate a new ID if not provided
+	if newBook.ID == "" {
+		newBook.ID = strconv.Itoa(len(books) + 1)
+	}
+
+	// Check if book with this ID already exists
+	for _, book := range books {
+		if book.ID == newBook.ID {
+			respondWithError(c, http.StatusConflict, "Book with this ID already exists", ErrBookExists)
+			return
+		}
+	}
+
+	// Add the new book to the slice
+	books = append(books, newBook)
+	
+	// Return the new book with a 201 Created status
+	c.JSON(http.StatusCreated, newBook)
+}
+
+// updateBook updates a book with the specified ID
+func updateBook(c *gin.Context) {
+	id := c.Param("id")
+	var updatedBook Book
+
+	// Validate ID
+	if id == "" {
+		respondWithError(c, http.StatusBadRequest, "Invalid book ID", ErrInvalidID)
+		return
+	}
+
+	// Call ShouldBindJSON to bind the received JSON to updatedBook
+	if err := c.ShouldBindJSON(&updatedBook); err != nil {
+		respondWithValidationError(c, err)
+		return
+	}
+
+	// Loop through the books, looking for the one to update
+	for i, book := range books {
+		if book.ID == id {
+			// Update the book
+			updatedBook.ID = id // Ensure the ID doesn't change
+			books[i] = updatedBook
+			c.JSON(http.StatusOK, updatedBook)
+			return
+		}
+	}
+
+	// Book not found
+	respondWithError(c, http.StatusNotFound, "Book not found", ErrBookNotFound)
+}
+
+// deleteBook removes a book with the specified ID
+func deleteBook(c *gin.Context) {
+	id := c.Param("id")
+
+	// Validate ID
+	if id == "" {
+		respondWithError(c, http.StatusBadRequest, "Invalid book ID", ErrInvalidID)
+		return
+	}
+
+	// Loop through the books, looking for the one to delete
+	for i, book := range books {
+		if book.ID == id {
+			// Remove the book by appending books before this one and after this one
+			books = append(books[:i], books[i+1:]...)
+			c.JSON(http.StatusOK, gin.H{"message": "Book deleted successfully"})
+			return
+		}
+	}
+
+	// Book not found
+	respondWithError(c, http.StatusNotFound, "Book not found", ErrBookNotFound)
+}
+```
+
+In this chapter, we've learned how to:
+- Create a standard error response format
+- Use appropriate HTTP status codes
+- Handle validation errors with detailed feedback
+- Implement authentication middleware with proper error responses
+- Conditionally display error details based on environment
+- Create custom error types for common scenarios
+
+In the next chapter, we'll explore Gin middleware in more depth and create some custom middleware for our API.

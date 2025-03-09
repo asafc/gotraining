@@ -1,0 +1,150 @@
+---
+title: "Kubernetes Controller Basics"
+---
+
+Controllers are the foundation of how Kubernetes maintains system state. Understanding how controllers work is essential to building effective operators. This chapter explains the controller pattern and introduces the reconciliation process.
+
+## The Control Loop Pattern
+
+At its core, a Kubernetes controller implements a "control loop" pattern. This pattern constantly watches for changes to resources and takes action to ensure the actual state of the cluster matches the desired state.
+
+```mermaid
+flowchart LR
+    A[Watch for Changes] --> B[List Resources]
+    B --> C[Reconcile State]
+    C --> D[Update Resources]
+    D --> A
+```
+
+This pattern is often summarized as:
+
+1. **Observe**: Watch for changes to resources
+2. **Analyze**: Compare current state with desired state
+3. **Act**: Take actions to align current with desired state
+
+## The Reconciliation Process
+
+Reconciliation is the heart of a controller. It's the process of comparing the actual state of a resource with its desired state and making the necessary changes to align them.
+
+```mermaid
+flowchart TD
+    A[Reconciliation Triggered] --> B{Resource exists?}
+    B -->|Yes| C[Compare Current vs Desired State]
+    B -->|No| D[Create Resource]
+    C -->|Different| E[Update Resource]
+    C -->|Same| F[No Action Required]
+    E --> G[Next Reconciliation]
+    F --> G
+    D --> G
+```
+
+Key aspects of reconciliation:
+
+- **Idempotent**: Running the reconciler multiple times should not cause problems
+- **Eventual Consistency**: The system may take time to reach the desired state
+- **Level-Triggered**: The controller focuses on the current state, not individual events
+
+## Events and Informers
+
+Controllers use the Kubernetes API server to watch for changes. The mechanism for this is called an "informer."
+
+```mermaid
+sequenceDiagram
+    participant C as Controller
+    participant I as Informer
+    participant A as API Server
+    participant W as Work Queue
+    
+    I ->> A: Watch resources
+    A ->> I: Stream of events
+    I ->> I: Update local cache
+    I ->> W: Enqueue key for reconciliation
+    C ->> W: Dequeue key
+    C ->> I: Get object from cache
+    C ->> C: Reconcile object
+    C ->> A: Update status
+```
+
+The informer:
+- Maintains a local cache of resources
+- Watches for changes
+- Filters events
+- Triggers reconciliation by adding items to a work queue
+
+## The Watch-List-Reconcile Pattern
+
+The controller pattern implements three main operations:
+
+1. **Watch**: Observe changes to resources
+2. **List**: Retrieve the current state of resources
+3. **Reconcile**: Align actual state with desired state
+
+```mermaid
+flowchart LR
+    A[Watch] -->|Change Detected| B[Work Queue]
+    B -->|Process Item| C[Reconcile]
+    C -->|Get Current State| D[List]
+    D --> E[Compare with Desired State]
+    E -->|Different| F[Update Resources]
+    F --> A
+    E -->|Same| A
+```
+
+## Resources and Resource Ownership
+
+Controllers often manage multiple related resources. For example, a Deployment controller manages ReplicaSets, which in turn manage Pods.
+
+To track these relationships, Kubernetes uses **owner references**:
+
+```mermaid
+graph TD
+    A[Deployment] -->|owns| B[ReplicaSet]
+    B -->|owns| C[Pod]
+    C -->|references| D[Service Account]
+    C -->|references| E[ConfigMap]
+    C -->|references| F[Secret]
+```
+
+Owner references:
+- Establish parent-child relationships between resources
+- Enable garbage collection when parent resources are deleted
+- Prevent orphaned child resources
+
+## Error Handling and Requeuing
+
+Controllers must handle errors gracefully. When a reconciliation fails:
+
+1. Log the error
+2. Requeue the item for later processing
+3. Apply exponential backoff for retries
+
+```mermaid
+flowchart LR
+    A[Reconcile] -->|Success| B[Done]
+    A -->|Temporary Error| C[Requeue with Backoff]
+    A -->|Permanent Error| D[Log and Skip]
+    C --> A
+```
+
+## Controller Runtime in Go
+
+In Go, we typically use controller-runtime library to implement controllers. This provides:
+
+- Reconciler interface
+- Manager to coordinate controllers and shared resources
+- Source and EventHandler to configure watches
+- Predicate to filter events
+- Client to interact with the Kubernetes API
+
+```go
+// Sample reconciler interface from controller-runtime
+type Reconciler interface {
+    Reconcile(context.Context, Request) (Result, error)
+}
+```
+
+## Conclusion
+
+Understanding the controller pattern is fundamental to building Kubernetes operators. The reconciliation loop, informers, and ownership patterns form the foundation for extending Kubernetes with custom operational logic.
+
+In the next chapter, we'll set up our development environment and start building a simple operator using the concepts we've learned.

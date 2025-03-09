@@ -1,0 +1,716 @@
+---
+title: "Exercise 5: Solution"
+---
+
+This solution implements a complete Todo API using Gin, GORM, SQLite, and JWT authentication. The code is organized into different modules for better maintainability.
+
+## Project Structure
+
+```
+todo-api/
+├── main.go
+├── db/
+│   └── db.go
+├── models/
+│   └── models.go
+├── middleware/
+│   └── middleware.go
+├── handlers/
+│   ├── todo_handlers.go
+│   └── user_handlers.go
+├── routes/
+│   └── routes.go
+└── utils/
+    └── jwt.go
+```
+
+## Main Application
+
+The `main.go` file is the entry point of the application:
+
+```go
+// main.go
+package main
+
+import (
+	"log"
+	"todo-api/db"
+	"todo-api/routes"
+)
+
+func main() {
+	// Initialize database
+	if err := db.InitDB(); err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+
+	// Setup routes
+	router := routes.SetupRouter()
+
+	// Start the server
+	log.Println("Starting server on :8080")
+	router.Run(":8080")
+}
+```
+
+## Database Setup
+
+The `db.go` file handles database connection and initialization:
+
+```go
+// db/db.go
+package db
+
+import (
+	"log"
+	"todo-api/models"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+)
+
+var DB *gorm.DB
+
+// InitDB initializes the database connection and creates tables
+func InitDB() error {
+	var err error
+
+	// Connect to SQLite database
+	DB, err = gorm.Open(sqlite.Open("todos.db"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Info),
+	})
+	if err != nil {
+		return err
+	}
+
+	// Auto migrate the models
+	err = DB.AutoMigrate(&models.User{}, &models.Todo{})
+	if err != nil {
+		return err
+	}
+
+	log.Println("Database initialized successfully")
+	return nil
+}
+```
+
+## Models
+
+The `models.go` file defines your database models:
+
+```go
+// models/models.go
+package models
+
+import (
+	"gorm.io/gorm"
+)
+
+// User represents a user in the system
+type User struct {
+	gorm.Model
+	Username string `json:"username" gorm:"unique" binding:"required"`
+	Password string `json:"-" binding:"required"` // Password is not returned in JSON
+}
+
+// Todo represents a todo item
+type Todo struct {
+	gorm.Model
+	Title     string `json:"title" binding:"required"`
+	Completed bool   `json:"completed" gorm:"default:false"`
+	UserID    uint   `json:"user_id"`
+	User      User   `json:"-" gorm:"foreignKey:UserID"` // Relationship to User
+}
+
+// UserSignup is used for user registration
+type UserSignup struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+// UserLogin is used for user login
+type UserLogin struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+// LoginResponse is returned after successful login
+type LoginResponse struct {
+	Token  string `json:"token"`
+	UserID uint   `json:"user_id"`
+}
+
+// TodoResponse is the format returned by API
+type TodoResponse struct {
+	ID        uint   `json:"id"`
+	Title     string `json:"title"`
+	Completed bool   `json:"completed"`
+	UserID    uint   `json:"user_id"`
+}
+
+// Convert Todo to TodoResponse
+func (t *Todo) ToResponse() TodoResponse {
+	return TodoResponse{
+		ID:        t.ID,
+		Title:     t.Title,
+		Completed: t.Completed,
+		UserID:    t.UserID,
+	}
+}
+```
+
+## Middleware
+
+The `middleware.go` file contains authentication and logging middleware:
+
+```go
+// middleware/middleware.go
+package middleware
+
+import (
+	"log"
+	"net/http"
+	"strings"
+	"time"
+	"todo-api/utils"
+
+	"github.com/gin-gonic/gin"
+)
+
+// JWTAuthMiddleware authenticates requests using JWT
+func JWTAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Get the Authorization header
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Authorization header required",
+			})
+			c.Abort()
+			return
+		}
+
+		// Check if the header starts with "Bearer "
+		const prefix = "Bearer "
+		if len(authHeader) < len(prefix) || !strings.HasPrefix(authHeader, prefix) {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Authorization header must start with 'Bearer '",
+			})
+			c.Abort()
+			return
+		}
+
+		// Extract the token
+		tokenString := authHeader[len(prefix):]
+
+		// Validate the token
+		claims, err := utils.ValidateToken(tokenString)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Invalid token: " + err.Error(),
+			})
+			c.Abort()
+			return
+		}
+
+		// Set user ID in context
+		c.Set("userID", claims.UserID)
+		c.Next()
+	}
+}
+
+// LoggingMiddleware logs request details
+func LoggingMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Start timer
+		startTime := time.Now()
+
+		// Process request
+		c.Next()
+
+		// Calculate latency
+		latency := time.Since(startTime)
+
+		// Log request
+		log.Printf("[%s] %s - Status: %d - Latency: %v",
+			c.Request.Method,
+			c.Request.URL.Path,
+			c.Writer.Status(),
+			latency,
+		)
+	}
+}
+```
+
+## JWT Utilities
+
+The `jwt.go` file handles JWT token generation and validation:
+
+```go
+// utils/jwt.go
+package utils
+
+import (
+	"errors"
+	"time"
+
+	"github.com/golang-jwt/jwt/v4"
+)
+
+// JWT secret key (in production, this should be stored securely)
+var jwtSecret = []byte("your-secret-key-change-in-production")
+
+// JWTClaims represents JWT claims
+type JWTClaims struct {
+	UserID uint `json:"user_id"`
+	jwt.RegisteredClaims
+}
+
+// GenerateToken creates a new JWT token for a user
+func GenerateToken(userID uint) (string, error) {
+	// Set expiration time
+	expirationTime := time.Now().Add(24 * time.Hour)
+
+	// Create claims
+	claims := &JWTClaims{
+		UserID: userID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+
+	// Create token
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+
+	// Sign token
+	tokenString, err := token.SignedString(jwtSecret)
+	if err != nil {
+		return "", err
+	}
+
+	return tokenString, nil
+}
+
+// ValidateToken validates a JWT token and returns its claims
+func ValidateToken(tokenString string) (*JWTClaims, error) {
+	// Parse token
+	token, err := jwt.ParseWithClaims(
+		tokenString,
+		&JWTClaims{},
+		func(token *jwt.Token) (interface{}, error) {
+			return jwtSecret, nil
+		},
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate token
+	if !token.Valid {
+		return nil, errors.New("invalid token")
+	}
+
+	// Extract claims
+	claims, ok := token.Claims.(*JWTClaims)
+	if !ok {
+		return nil, errors.New("invalid claims")
+	}
+
+	return claims, nil
+}
+```
+
+## Todo Handlers
+
+The `todo_handlers.go` file implements the todo API endpoints:
+
+```go
+// handlers/todo_handlers.go
+package handlers
+
+import (
+	"net/http"
+	"todo-api/db"
+	"todo-api/models"
+
+	"github.com/gin-gonic/gin"
+)
+
+// GetAllTodos returns all todos for the authenticated user
+func GetAllTodos(c *gin.Context) {
+	// Get user ID from context
+	userID, _ := c.Get("userID")
+
+	var todos []models.Todo
+	result := db.DB.Where("user_id = ?", userID).Find(&todos)
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to fetch todos",
+		})
+		return
+	}
+
+	// Convert to response format
+	var todoResponses []models.TodoResponse
+	for _, todo := range todos {
+		todoResponses = append(todoResponses, todo.ToResponse())
+	}
+
+	c.JSON(http.StatusOK, todoResponses)
+}
+
+// GetTodoByID returns a specific todo if it belongs to the authenticated user
+func GetTodoByID(c *gin.Context) {
+	id := c.Param("id")
+	userID, _ := c.Get("userID")
+
+	var todo models.Todo
+	result := db.DB.Where("id = ? AND user_id = ?", id, userID).First(&todo)
+	if result.Error != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "Todo not found",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, todo.ToResponse())
+}
+
+// CreateTodo creates a new todo for the authenticated user
+func CreateTodo(c *gin.Context) {
+	var input struct {
+		Title string `json:"title" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid input: " + err.Error(),
+		})
+		return
+	}
+
+	userID, _ := c.Get("userID")
+
+	todo := models.Todo{
+		Title:  input.Title,
+		UserID: userID.(uint),
+	}
+
+	result := db.DB.Create(&todo)
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to create todo",
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, todo.ToResponse())
+}
+
+// UpdateTodo updates an existing todo if it belongs to the authenticated user
+func UpdateTodo(c *gin.Context) {
+	id := c.Param("id")
+	userID, _ := c.Get("userID")
+
+	// Check if the todo exists and belongs to user
+	var existingTodo models.Todo
+	result := db.DB.Where("id = ? AND user_id = ?", id, userID).First(&existingTodo)
+	if result.Error != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "Todo not found",
+		})
+		return
+	}
+
+	// Bind input
+	var input struct {
+		Title     string `json:"title"`
+		Completed bool   `json:"completed"`
+	}
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid input: " + err.Error(),
+		})
+		return
+	}
+
+	// Update fields
+	todoMap := map[string]interface{}{}
+	if input.Title != "" {
+		todoMap["title"] = input.Title
+	}
+	todoMap["completed"] = input.Completed
+
+	// Update the todo
+	db.DB.Model(&existingTodo).Updates(todoMap)
+
+	// Retrieve the updated todo
+	db.DB.First(&existingTodo, id)
+
+	c.JSON(http.StatusOK, existingTodo.ToResponse())
+}
+
+// DeleteTodo deletes a todo if it belongs to the authenticated user
+func DeleteTodo(c *gin.Context) {
+	id := c.Param("id")
+	userID, _ := c.Get("userID")
+
+	// Check if the todo exists and belongs to user
+	var todo models.Todo
+	result := db.DB.Where("id = ? AND user_id = ?", id, userID).First(&todo)
+	if result.Error != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "Todo not found",
+		})
+		return
+	}
+
+	// Delete the todo
+	db.DB.Delete(&todo)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Todo deleted successfully",
+	})
+}
+
+// ToggleTodoStatus updates the completed status of a todo
+func ToggleTodoStatus(c *gin.Context) {
+	id := c.Param("id")
+	userID, _ := c.Get("userID")
+
+	// Check if the todo exists and belongs to user
+	var todo models.Todo
+	result := db.DB.Where("id = ? AND user_id = ?", id, userID).First(&todo)
+	if result.Error != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "Todo not found",
+		})
+		return
+	}
+
+	// Toggle the completed status
+	todo.Completed = !todo.Completed
+	db.DB.Save(&todo)
+
+	c.JSON(http.StatusOK, todo.ToResponse())
+}
+```
+
+## User Handlers
+
+The `user_handlers.go` file implements user authentication:
+
+```go
+// handlers/user_handlers.go
+package handlers
+
+import (
+	"net/http"
+	"todo-api/db"
+	"todo-api/models"
+	"todo-api/utils"
+
+	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
+)
+
+// RegisterUser creates a new user account
+func RegisterUser(c *gin.Context) {
+	var input models.UserSignup
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid input: " + err.Error(),
+		})
+		return
+	}
+
+	// Hash the password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to process your request",
+		})
+		return
+	}
+
+	// Create user
+	user := models.User{
+		Username: input.Username,
+		Password: string(hashedPassword),
+	}
+
+	// Save user to database
+	result := db.DB.Create(&user)
+	if result.Error != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Username already exists",
+		})
+		return
+	}
+
+	// Generate token
+	token, err := utils.GenerateToken(user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to generate token",
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, models.LoginResponse{
+		Token:  token,
+		UserID: user.ID,
+	})
+}
+
+// LoginUser authenticates a user and returns a JWT token
+func LoginUser(c *gin.Context) {
+	var input models.UserLogin
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid input: " + err.Error(),
+		})
+		return
+	}
+
+	// Find user
+	var user models.User
+	result := db.DB.Where("username = ?", input.Username).First(&user)
+	if result.Error != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "Invalid username or password",
+		})
+		return
+	}
+
+	// Verify password
+	err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password))
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "Invalid username or password",
+		})
+		return
+	}
+
+	// Generate token
+	token, err := utils.GenerateToken(user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to generate token",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.LoginResponse{
+		Token:  token,
+		UserID: user.ID,
+	})
+}
+```
+
+## Routes
+
+The `routes.go` file sets up all API routes:
+
+```go
+// routes/routes.go
+package routes
+
+import (
+	"todo-api/handlers"
+	"todo-api/middleware"
+
+	"github.com/gin-gonic/gin"
+)
+
+// SetupRouter configures the API routes
+func SetupRouter() *gin.Engine {
+	router := gin.New()
+	
+	// Add middleware
+	router.Use(gin.Recovery())
+	router.Use(middleware.LoggingMiddleware())
+
+	// Public routes
+	router.POST("/register", handlers.RegisterUser)
+	router.POST("/login", handlers.LoginUser)
+
+	// Protected routes
+	api := router.Group("/api")
+	api.Use(middleware.JWTAuthMiddleware())
+	{
+		// Todo routes
+		api.GET("/todos", handlers.GetAllTodos)
+		api.GET("/todos/:id", handlers.GetTodoByID)
+		api.POST("/todos", handlers.CreateTodo)
+		api.PUT("/todos/:id", handlers.UpdateTodo)
+		api.DELETE("/todos/:id", handlers.DeleteTodo)
+		api.PATCH("/todos/:id/toggle", handlers.ToggleTodoStatus)
+	}
+
+	return router
+}
+```
+
+## Testing the API
+
+Once you've implemented the solution, you can test it with tools like curl, Postman, or HTTPie. Here are some example requests:
+
+1. Register a new user:
+```bash
+curl -X POST http://localhost:8080/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"testuser", "password":"password123"}'
+```
+
+2. Login:
+```bash
+curl -X POST http://localhost:8080/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"testuser", "password":"password123"}'
+```
+
+3. Create a todo (use the token from login):
+```bash
+curl -X POST http://localhost:8080/api/todos \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN_HERE" \
+  -d '{"title":"Learn Go"}'
+```
+
+4. Get all todos:
+```bash
+curl -X GET http://localhost:8080/api/todos \
+  -H "Authorization: Bearer YOUR_TOKEN_HERE"
+```
+
+5. Update a todo:
+```bash
+curl -X PUT http://localhost:8080/api/todos/1 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN_HERE" \
+  -d '{"title":"Learn Go Programming", "completed":true}'
+```
+
+6. Delete a todo:
+```bash
+curl -X DELETE http://localhost:8080/api/todos/1 \
+  -H "Authorization: Bearer YOUR_TOKEN_HERE"
+```
+
+## Conclusion
+
+This solution demonstrates how to build a complete REST API for a Todo application using Gin, GORM, and SQLite. The code is organized into multiple files for better maintainability and follows best practices for Go web development.
+
+Key concepts demonstrated:
+- Using GORM for database interactions
+- Implementing JWT authentication
+- Structuring a Gin application
+- Using middleware for cross-cutting concerns
+- Following RESTful API design principles
