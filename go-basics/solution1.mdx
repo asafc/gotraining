@@ -1,0 +1,771 @@
+---
+title: "Exercise 1: Solution"
+---
+
+## Project Setup
+
+```bash
+# Create project directory
+mkdir gopher-library
+cd gopher-library
+
+# Initialize Go module
+go mod init github.com/yourusername/gopher-library
+
+# Install dependencies
+go get -u github.com/spf13/cobra
+```
+
+## Project Structure
+
+```
+gopher-library/
+├── cmd/
+│   ├── root.go
+│   ├── add.go
+│   ├── checkout.go
+│   ├── list.go
+│   ├── report.go
+│   ├── return.go
+│   └── search.go
+├── internal/
+│   ├── book/
+│   │   └── book.go
+│   ├── patron/
+│   │   └── patron.go
+│   ├── transaction/
+│   │   └── transaction.go
+│   └── library/
+│       └── library.go
+├── main.go
+└── go.mod
+```
+
+## File Contents
+
+### main.go
+
+```go
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/yourusername/gopher-library/cmd"
+	"github.com/yourusername/gopher-library/internal/book"
+	"github.com/yourusername/gopher-library/internal/library"
+	"github.com/yourusername/gopher-library/internal/patron"
+)
+
+func main() {
+	// Create library instance
+	lib := library.NewLibrary()
+	
+	// Add sample data
+	addSampleData(lib)
+	
+	// Create and configure root command
+	rootCmd := cmd.NewRootCommand(lib)
+	
+	// Register all subcommands
+	cmd.RegisterAddCommands(rootCmd, lib)
+	cmd.RegisterCheckoutCommand(rootCmd, lib)
+	cmd.RegisterReturnCommand(rootCmd, lib)
+	cmd.RegisterListCommand(rootCmd, lib)
+	cmd.RegisterSearchCommand(rootCmd, lib)
+	cmd.RegisterReportCommands(rootCmd, lib)
+	
+	// Execute the command
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// addSampleData adds sample books and patrons to the library
+func addSampleData(lib *library.Library) {
+	// Add sample books
+	lib.AddBook(book.NewBook("The Go Programming Language", "Alan A. A. Donovan", "978-0134190440", 2015))
+	lib.AddBook(book.NewBook("Learning Go", "Jon Bodner", "978-1492077213", 2021))
+	lib.AddBook(book.NewBook("Go in Action", "William Kennedy", "978-1617291784", 2015))
+	
+	// Add sample patrons
+	lib.AddPatron(patron.NewPatron(1001, "Alice Johnson", "alice@example.com"))
+	lib.AddPatron(patron.NewPatron(1002, "Bob Smith", "bob@example.com"))
+}
+```
+
+### internal/book/book.go
+
+```go
+package book
+
+import (
+	"strings"
+)
+
+// Book represents a library book
+type Book struct {
+	Title     string
+	Author    string
+	ISBN      string
+	PubYear   int
+	Available bool
+}
+
+// NewBook creates and returns a new Book instance
+func NewBook(title, author, isbn string, pubYear int) *Book {
+	return &Book{
+		Title:     title,
+		Author:    author,
+		ISBN:      isbn,
+		PubYear:   pubYear,
+		Available: true,
+	}
+}
+
+// Search implements the Searchable interface for Book
+func (b *Book) Search(query string) bool {
+	query = strings.ToLower(query)
+	return strings.Contains(strings.ToLower(b.Title), query) ||
+		strings.Contains(strings.ToLower(b.Author), query) ||
+		strings.Contains(strings.ToLower(b.ISBN), query)
+}
+```
+
+### internal/patron/patron.go
+
+```go
+package patron
+
+// Patron represents a library user
+type Patron struct {
+	ID      int
+	Name    string
+	Contact string
+}
+
+// NewPatron creates and returns a new Patron instance
+func NewPatron(id int, name, contact string) *Patron {
+	return &Patron{
+		ID:      id,
+		Name:    name,
+		Contact: contact,
+	}
+}
+```
+
+### internal/transaction/transaction.go
+
+```go
+package transaction
+
+import (
+	"time"
+
+	"github.com/yourusername/gopher-library/internal/book"
+	"github.com/yourusername/gopher-library/internal/patron"
+)
+
+// Transaction records book check-outs and returns
+type Transaction struct {
+	Book         *book.Book
+	Patron       *patron.Patron
+	CheckoutDate time.Time
+	ReturnDate   *time.Time // nil if not returned yet
+	DueDate      time.Time
+}
+
+// NewTransaction creates and returns a new Transaction
+func NewTransaction(book *book.Book, patron *patron.Patron, durationDays int) *Transaction {
+	checkoutDate := time.Now()
+	dueDate := checkoutDate.Add(time.Duration(durationDays) * 24 * time.Hour)
+	
+	return &Transaction{
+		Book:         book,
+		Patron:       patron,
+		CheckoutDate: checkoutDate,
+		DueDate:      dueDate,
+	}
+}
+
+// IsOverdue checks if a transaction is overdue
+func (t *Transaction) IsOverdue() bool {
+	return t.ReturnDate == nil && time.Now().After(t.DueDate)
+}
+
+// DaysOverdue returns the number of days a book is overdue
+func (t *Transaction) DaysOverdue() int {
+	if !t.IsOverdue() {
+		return 0
+	}
+	return int(time.Now().Sub(t.DueDate).Hours() / 24)
+}
+```
+
+### internal/library/library.go
+
+```go
+package library
+
+import (
+	"errors"
+	"time"
+
+	"github.com/yourusername/gopher-library/internal/book"
+	"github.com/yourusername/gopher-library/internal/patron"
+	"github.com/yourusername/gopher-library/internal/transaction"
+)
+
+// Error constants
+const (
+	ErrBookExists       = "book with this ISBN already exists"
+	ErrPatronExists     = "patron with this ID already exists"
+	ErrBookNotFound     = "book not found"
+	ErrBookUnavailable  = "book is not available"
+	ErrPatronNotFound   = "patron not found"
+	ErrNotCheckedOut    = "book is not checked out"
+	ErrNoTransaction    = "no open transaction found for this book"
+)
+
+// Library represents the main system
+type Library struct {
+	Books        map[string]*book.Book
+	Patrons      map[int]*patron.Patron
+	Transactions []*transaction.Transaction
+	LoanDuration int // Loan duration in days
+}
+
+// NewLibrary creates a new library instance
+func NewLibrary() *Library {
+	return &Library{
+		Books:        make(map[string]*book.Book),
+		Patrons:      make(map[int]*patron.Patron),
+		Transactions: make([]*transaction.Transaction, 0),
+		LoanDuration: 14, // Default loan duration is 14 days
+	}
+}
+
+// AddBook adds a new book to the library
+func (lib *Library) AddBook(b *book.Book) error {
+	if _, exists := lib.Books[b.ISBN]; exists {
+		return errors.New(ErrBookExists)
+	}
+
+	lib.Books[b.ISBN] = b
+	return nil
+}
+
+// AddPatron adds a new patron to the library
+func (lib *Library) AddPatron(p *patron.Patron) error {
+	if _, exists := lib.Patrons[p.ID]; exists {
+		return errors.New(ErrPatronExists)
+	}
+
+	lib.Patrons[p.ID] = p
+	return nil
+}
+
+// CheckoutBook checks out a book to a patron
+func (lib *Library) CheckoutBook(isbn string, patronID int) (*transaction.Transaction, error) {
+	b, exists := lib.Books[isbn]
+	if !exists {
+		return nil, errors.New(ErrBookNotFound)
+	}
+
+	if !b.Available {
+		return nil, errors.New(ErrBookUnavailable)
+	}
+
+	p, exists := lib.Patrons[patronID]
+	if !exists {
+		return nil, errors.New(ErrPatronNotFound)
+	}
+
+	b.Available = false
+	
+	t := transaction.NewTransaction(b, p, lib.LoanDuration)
+	lib.Transactions = append(lib.Transactions, t)
+	
+	return t, nil
+}
+
+// ReturnBook processes a book return
+func (lib *Library) ReturnBook(isbn string) (*transaction.Transaction, error) {
+	b, exists := lib.Books[isbn]
+	if !exists {
+		return nil, errors.New(ErrBookNotFound)
+	}
+
+	if b.Available {
+		return nil, errors.New(ErrNotCheckedOut)
+	}
+
+	// Find the open transaction for this book
+	for _, t := range lib.Transactions {
+		if t.Book.ISBN == isbn && t.ReturnDate == nil {
+			now := time.Now()
+			t.ReturnDate = &now
+			b.Available = true
+			return t, nil
+		}
+	}
+
+	return nil, errors.New(ErrNoTransaction)
+}
+
+// SearchBooks finds books matching the query
+func (lib *Library) SearchBooks(query string) []*book.Book {
+	var results []*book.Book
+
+	for _, b := range lib.Books {
+		if b.Search(query) {
+			results = append(results, b)
+		}
+	}
+
+	return results
+}
+
+// GetAllBooks returns all books in the library
+func (lib *Library) GetAllBooks() []*book.Book {
+	books := make([]*book.Book, 0, len(lib.Books))
+	for _, b := range lib.Books {
+		books = append(books, b)
+	}
+	return books
+}
+
+// GetOverdueTransactions returns all overdue transactions
+func (lib *Library) GetOverdueTransactions() []*transaction.Transaction {
+	var overdue []*transaction.Transaction
+	
+	for _, t := range lib.Transactions {
+		if t.IsOverdue() {
+			overdue = append(overdue, t)
+		}
+	}
+	
+	return overdue
+}
+```
+
+### cmd/root.go
+
+```go
+package cmd
+
+import (
+	"github.com/spf13/cobra"
+	"github.com/yourusername/gopher-library/internal/library"
+)
+
+// NewRootCommand creates the root command for the application
+func NewRootCommand(lib *library.Library) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "gopher-library",
+		Short: "Gopher City Library Management System",
+		Long: `A modern library management system built with Go.
+This application allows librarians to manage books, patrons,
+checkouts, returns, and generate reports.`,
+		Run: func(cmd *cobra.Command, args []string) {
+			// If no subcommand is provided, display help
+			cmd.Help()
+		},
+	}
+	
+	return cmd
+}
+```
+
+### cmd/add.go
+
+```go
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+
+	"github.com/spf13/cobra"
+	"github.com/yourusername/gopher-library/internal/book"
+	"github.com/yourusername/gopher-library/internal/library"
+	"github.com/yourusername/gopher-library/internal/patron"
+)
+
+// RegisterAddCommands registers all add-related commands
+func RegisterAddCommands(rootCmd *cobra.Command, lib *library.Library) {
+	// Create the add command
+	addCmd := &cobra.Command{
+		Use:   "add",
+		Short: "Add books or patrons",
+		Long:  `Add new books or patrons to the library system.`,
+		Run: func(cmd *cobra.Command, args []string) {
+			cmd.Help()
+		},
+	}
+	
+	// Add book command
+	addBookCmd := createAddBookCommand(lib)
+	
+	// Add patron command
+	addPatronCmd := createAddPatronCommand(lib)
+	
+	// Add commands to parent
+	addCmd.AddCommand(addBookCmd)
+	addCmd.AddCommand(addPatronCmd)
+	rootCmd.AddCommand(addCmd)
+}
+
+// createAddBookCommand creates the command for adding books
+func createAddBookCommand(lib *library.Library) *cobra.Command {
+	var title, author, isbn string
+	var pubYear int
+	
+	cmd := &cobra.Command{
+		Use:   "book",
+		Short: "Add a new book",
+		Long:  `Add a new book to the library inventory with title, author, ISBN, and publication year.`,
+		Run: func(cmd *cobra.Command, args []string) {
+			b := book.NewBook(title, author, isbn, pubYear)
+			if err := lib.AddBook(b); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return
+			}
+			fmt.Printf("Book added successfully: '%s' by %s\n", title, author)
+		},
+	}
+	
+	// Add flags
+	cmd.Flags().StringVarP(&title, "title", "t", "", "Book title")
+	cmd.Flags().StringVarP(&author, "author", "a", "", "Book author")
+	cmd.Flags().StringVarP(&isbn, "isbn", "i", "", "ISBN number")
+	cmd.Flags().IntVarP(&pubYear, "year", "y", 0, "Publication year")
+	
+	cmd.MarkFlagRequired("title")
+	cmd.MarkFlagRequired("author")
+	cmd.MarkFlagRequired("isbn")
+	cmd.MarkFlagRequired("year")
+	
+	return cmd
+}
+
+// createAddPatronCommand creates the command for adding patrons
+func createAddPatronCommand(lib *library.Library) *cobra.Command {
+	var id int
+	var name, contact string
+	
+	cmd := &cobra.Command{
+		Use:   "patron",
+		Short: "Add a new patron",
+		Long:  `Add a new patron to the library system with ID, name, and contact information.`,
+		Run: func(cmd *cobra.Command, args []string) {
+			p := patron.NewPatron(id, name, contact)
+			if err := lib.AddPatron(p); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return
+			}
+			fmt.Printf("Patron added successfully: %s (ID: %d)\n", name, id)
+		},
+	}
+	
+	// Add flags
+	cmd.Flags().IntVarP(&id, "id", "i", 0, "Patron ID")
+	cmd.Flags().StringVarP(&name, "name", "n", "", "Patron name")
+	cmd.Flags().StringVarP(&contact, "contact", "c", "", "Contact information")
+	
+	cmd.MarkFlagRequired("id")
+	cmd.MarkFlagRequired("name")
+	cmd.MarkFlagRequired("contact")
+	
+	return cmd
+}
+```
+
+### cmd/checkout.go
+
+```go
+package cmd
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+	"github.com/yourusername/gopher-library/internal/library"
+)
+
+// RegisterCheckoutCommand registers the checkout command
+func RegisterCheckoutCommand(rootCmd *cobra.Command, lib *library.Library) {
+	var isbn string
+	var patronID int
+	
+	checkoutCmd := &cobra.Command{
+		Use:   "checkout",
+		Short: "Check out a book to a patron",
+		Long:  `Check out a book to a patron by ISBN and patron ID.`,
+		Run: func(cmd *cobra.Command, args []string) {
+			trans, err := lib.CheckoutBook(isbn, patronID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return
+			}
+			
+			fmt.Printf("Book '%s' checked out to %s. Due on: %s\n", 
+				trans.Book.Title, 
+				trans.Patron.Name, 
+				trans.DueDate.Format("Jan 02, 2006"))
+		},
+	}
+	
+	checkoutCmd.Flags().StringVarP(&isbn, "isbn", "i", "", "ISBN of the book to check out")
+	checkoutCmd.Flags().IntVarP(&patronID, "patron", "p", 0, "ID of the patron checking out the book")
+	
+	checkoutCmd.MarkFlagRequired("isbn")
+	checkoutCmd.MarkFlagRequired("patron")
+	
+	rootCmd.AddCommand(checkoutCmd)
+}
+```
+
+### cmd/return.go
+
+```go
+package cmd
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+	"github.com/yourusername/gopher-library/internal/library"
+)
+
+// RegisterReturnCommand registers the return command
+func RegisterReturnCommand(rootCmd *cobra.Command, lib *library.Library) {
+	var isbn string
+	
+	returnCmd := &cobra.Command{
+		Use:   "return",
+		Short: "Return a book",
+		Long:  `Process a book return by ISBN.`,
+		Run: func(cmd *cobra.Command, args []string) {
+			trans, err := lib.ReturnBook(isbn)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return
+			}
+			
+			fmt.Printf("Book '%s' has been returned\n", trans.Book.Title)
+			
+			now := *trans.ReturnDate
+			if now.After(trans.DueDate) {
+				fmt.Printf("Note: This book was returned %d days late.\n", trans.DaysOverdue())
+			}
+		},
+	}
+	
+	returnCmd.Flags().StringVarP(&isbn, "isbn", "i", "", "ISBN of the book to return")
+	returnCmd.MarkFlagRequired("isbn")
+	
+	rootCmd.AddCommand(returnCmd)
+}
+```
+
+### cmd/list.go
+
+```go
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"text/tabwriter"
+
+	"github.com/spf13/cobra"
+	"github.com/yourusername/gopher-library/internal/library"
+)
+
+// RegisterListCommand registers the list command
+func RegisterListCommand(rootCmd *cobra.Command, lib *library.Library) {
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all books",
+		Long:  `Display a list of all books in the library.`,
+		Run: func(cmd *cobra.Command, args []string) {
+			books := lib.GetAllBooks()
+			
+			if len(books) == 0 {
+				fmt.Println("No books in the library.")
+				return
+			}
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+			fmt.Fprintln(w, "Title\tAuthor\tISBN\tYear\tStatus")
+			fmt.Fprintln(w, "-----\t------\t----\t----\t------")
+			
+			for _, book := range books {
+				status := "Available"
+				if !book.Available {
+					status = "Checked Out"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n",
+					book.Title, book.Author, book.ISBN, book.PubYear, status)
+			}
+			
+			w.Flush()
+		},
+	}
+	
+	rootCmd.AddCommand(listCmd)
+}
+```
+
+### cmd/search.go
+
+```go
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"text/tabwriter"
+
+	"github.com/spf13/cobra"
+	"github.com/yourusername/gopher-library/internal/library"
+)
+
+// RegisterSearchCommand registers the search command
+func RegisterSearchCommand(rootCmd *cobra.Command, lib *library.Library) {
+	var query string
+	
+	searchCmd := &cobra.Command{
+		Use:   "search",
+		Short: "Search for books",
+		Long:  `Search for books by title, author, or ISBN.`,
+		Run: func(cmd *cobra.Command, args []string) {
+			results := lib.SearchBooks(query)
+			
+			if len(results) == 0 {
+				fmt.Println("No results found.")
+				return
+			}
+
+			fmt.Printf("Found %d results:\n\n", len(results))
+			
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+			fmt.Fprintln(w, "Title\tAuthor\tISBN\tStatus")
+			fmt.Fprintln(w, "-----\t------\t----\t------")
+			
+			for _, book := range results {
+				status := "Available"
+				if !book.Available {
+					status = "Checked Out"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+					book.Title, book.Author, book.ISBN, status)
+			}
+			
+			w.Flush()
+		},
+	}
+	
+	searchCmd.Flags().StringVarP(&query, "query", "q", "", "Search query")
+	searchCmd.MarkFlagRequired("query")
+	
+	rootCmd.AddCommand(searchCmd)
+}
+```
+
+### cmd/report.go
+
+```go
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"text/tabwriter"
+
+	"github.com/spf13/cobra"
+	"github.com/yourusername/gopher-library/internal/library"
+)
+
+// RegisterReportCommands registers the report commands
+func RegisterReportCommands(rootCmd *cobra.Command, lib *library.Library) {
+	// Create the main report command
+	reportCmd := &cobra.Command{
+		Use:   "report",
+		Short: "Generate library reports",
+		Long:  `Generate various reports, such as overdue books.`,
+		Run: func(cmd *cobra.Command, args []string) {
+			cmd.Help()
+		},
+	}
+	
+	// Create the overdue report command
+	overdueCmd := createOverdueReportCommand(lib)
+	
+	// Add commands to parent
+	reportCmd.AddCommand(overdueCmd)
+	rootCmd.AddCommand(reportCmd)
+}
+
+// createOverdueReportCommand creates the command for overdue reports
+func createOverdueReportCommand(lib *library.Library) *cobra.Command {
+	return &cobra.Command{
+		Use:   "overdue",
+		Short: "Generate overdue books report",
+		Long:  `Display a report of all books that are currently overdue.`,
+		Run: func(cmd *cobra.Command, args []string) {
+			overdue := lib.GetOverdueTransactions()
+			
+			if len(overdue) == 0 {
+				fmt.Println("No overdue books.")
+				return
+			}
+
+			fmt.Printf("Overdue Books Report (%d books):\n\n", len(overdue))
+			
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+			fmt.Fprintln(w, "Title\tISBN\tPatron\tID\tDue Date\tDays Overdue")
+			fmt.Fprintln(w, "-----\t----\t------\t--\t--------\t------------")
+			
+			for _, t := range overdue {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%d\n",
+					t.Book.Title, t.Book.ISBN, t.Patron.Name, t.Patron.ID,
+					t.DueDate.Format("Jan 02, 2006"), t.DaysOverdue())
+			}
+			
+			w.Flush()
+		},
+	}
+}
+```
+
+## Usage Examples
+
+```bash
+# Add a new book
+$ gopher-library add book --title "Effective Go" --author "The Go Authors" --isbn "978-1234567890" --year 2020
+
+# Add a new patron
+$ gopher-library add patron --id 1003 --name "Charlie Brown" --contact "charlie@example.com" 
+
+# Check out a book
+$ gopher-library checkout --isbn "978-0134190440" --patron 1001
+
+# Return a book
+$ gopher-library return --isbn "978-0134190440"
+
+# List all books
+$ gopher-library list
+
+# Search for books
+$ gopher-library search --query "programming"
+
+# Generate overdue report
+$ gopher-library report overdue
+```

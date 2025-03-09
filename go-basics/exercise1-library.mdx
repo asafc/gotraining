@@ -1,0 +1,48 @@
+---
+title: "Exercise 1: Library Book Management System"
+---
+
+## Description
+
+You've been hired as a developer for the Gopher City Library.
+The library needs a new system to manage their book inventory and track borrowing activity.
+Your task is to create a command-line book management system that allows librarians to add books, check books in and out, and generate reports.
+
+## Requirements
+
+1. Create a program that manages a library of books with the following functionality:
+   - Add new books to the inventory
+   - Check out books to patrons
+   - Return books to the inventory
+   - List all books
+   - Search for books by title or author
+   - Generate a report of overdue books
+
+2. Implement the following data structures:
+   - A `Book` struct with fields for title, author, ISBN, and publication year
+   - A `Patron` struct with fields for name, ID, and contact information
+   - A `Transaction` struct that records check-outs and returns
+
+3. Implement interfaces for:
+   - `Searchable` - anything that can be searched
+   - `Reporter` - anything that can generate reports
+
+4. Use proper error handling throughout the application
+
+5. Write at least one test function to verify functionality
+
+## Expected Output
+
+- Interactive command-line interface
+- Ability to add, check out, return, and list books
+- Search functionality
+- Basic reporting
+
+## Tips
+
+- Start by defining your data structures
+- Use pointers when you need to modify values
+- Consider how interfaces can help organize your code
+- Use the `fmt` package for user interaction
+- Use maps to store your book and patron data
+- To implement a CLI tool, use the [cobra library](https://github.com/spf13/cobra)
