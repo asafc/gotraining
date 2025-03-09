@@ -2,3 +2,459 @@
 title: Flow Control
 description: for, if, else, switch and defer
 ---
+
+In this chapter, we'll explore Go's flow control structures that allow you to control the execution path of your program. These include loops, conditional statements, and ways to defer execution of functions.
+
+## For Loops
+
+Go has only one looping construct, the `for` loop. It can be used in several different ways.
+
+### Standard For Loop
+
+The most common form of the `for` loop has three components:
+- an initialization statement
+- a condition expression
+- a post statement
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    // Standard for loop with init, condition, and post statements
+    for i := 0; i < 5; i++ {
+        fmt.Println("Value of i:", i)
+    }
+}
+```
+
+The loop executes as follows:
+1. The initialization statement (`i := 0`) runs once before the first iteration
+2. Before each iteration, the condition (`i < 5`) is evaluated
+3. After each iteration, the post statement (`i++`) executes
+4. The loop terminates when the condition evaluates to `false`
+
+### For Loop as a While Loop
+
+The initialization and post statements are optional. By omitting them, you can use the `for` loop as a "while" loop:
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    sum := 1
+    
+    // For loop as a while loop
+    for sum < 100 {
+        sum += sum
+        fmt.Println("Current sum:", sum)
+    }
+    fmt.Println("Final sum:", sum)
+}
+```
+
+### Infinite Loop
+
+If you omit the condition as well, you create an infinite loop that will run forever (unless you break out of it):
+
+```go
+package main
+
+import (
+    "fmt"
+    "time"
+)
+
+func main() {
+    counter := 0
+    
+    // Infinite loop (while true)
+    for {
+        fmt.Println("Iteration:", counter)
+        counter++
+        
+        // Break out after 5 iterations
+        if counter >= 5 {
+            fmt.Println("Breaking out of the infinite loop")
+            break
+        }
+        
+        // Small delay to avoid printing too fast
+        time.Sleep(100 * time.Millisecond)
+    }
+}
+```
+
+### For Loop with Range
+
+The `range` form of the `for` loop iterates over elements in various data structures:
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    // Define a slice of strings
+    languages := []string{"Python", "Go", "Java", "C++"}
+    
+    // Iterate over a slice with range
+    for index, value := range languages {
+        fmt.Printf("Index: %d, Value: %s\n", index, value)
+    }
+    
+    // If you only need the index
+    for i := range languages {
+        fmt.Printf("Language at index %d: %s\n", i, languages[i])
+    }
+    
+    // If you only need the value, use _ to ignore the index
+    for _, language := range languages {
+        fmt.Printf("Language: %s\n", language)
+    }
+}
+```
+
+## Conditional Statements
+
+### If Statement
+
+The `if` statement in Go is similar to other languages but doesn't require parentheses around the condition:
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    x := 10
+    
+    // Basic if statement
+    if x > 5 {
+        fmt.Println("x is greater than 5")
+    }
+}
+```
+
+### If with a Short Statement
+
+The `if` statement can start with a short statement before the condition.
+
+Variables declared in the short statement are only available within the scope of the `if` statement (including the `else` blocks).
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    // If with a short statement
+    if x := 42; x > 20 {
+        fmt.Println("x is greater than 20")
+    }
+    
+    // Note: x is not accessible here
+    // fmt.Println(x) would cause a compilation error
+}
+```
+
+### If-Else Statement
+
+You can use `else` and `else if` to handle multiple conditions:
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    score := 85
+    
+    if score >= 90 {
+        fmt.Println("Grade: A")
+    } else if score >= 80 {
+        fmt.Println("Grade: B")
+    } else if score >= 70 {
+        fmt.Println("Grade: C")
+    } else if score >= 60 {
+        fmt.Println("Grade: D")
+    } else {
+        fmt.Println("Grade: F")
+    }
+}
+```
+
+## Switch Statement
+
+Go's `switch` statement is a cleaner way to write long chains of `if-else` statements:
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    day := "Tuesday"
+    
+    // Basic switch statement
+    switch day {
+    case "Monday":
+        fmt.Println("Start of the work week")
+    case "Tuesday", "Wednesday", "Thursday":
+        fmt.Println("Middle of the work week")
+    case "Friday":
+        fmt.Println("End of the work week")
+    default:
+        fmt.Println("It's the weekend!")
+    }
+}
+```
+
+**In Go, switch cases don't "fall through" by default.** Once a case is matched, the switch terminates. You don't need to include `break` statements.
+
+### Switch with Short Statement
+
+Like `if`, a `switch` can include a short statement before the expression:
+
+```go
+package main
+
+import "fmt"
+import "time"
+
+func main() {
+    // Switch with a short statement
+    switch today := time.Now().Weekday(); today {
+    case time.Saturday, time.Sunday:
+        fmt.Println("It's the weekend!")
+    default:
+        fmt.Println("It's a weekday.")
+    }
+}
+```
+
+### Switch with No Condition
+
+A `switch` without a condition is the same as `switch true`, which makes it a cleaner way to write long if-else chains:
+
+```go
+package main
+
+import "fmt"
+import "time"
+
+func main() {
+    hour := time.Now().Hour()
+    
+    // Switch with no condition
+    switch {
+    case hour < 12:
+        fmt.Println("Good morning!")
+    case hour < 17:
+        fmt.Println("Good afternoon!")
+    default:
+        fmt.Println("Good evening!")
+    }
+}
+```
+
+## Defer Statement
+
+The `defer` statement delays the execution of a function until the surrounding function returns:
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    // The deferred call will execute at the end of main()
+    defer fmt.Println("This prints last")
+    
+    fmt.Println("This prints first")
+    fmt.Println("This prints second")
+}
+```
+
+Deferred function calls are pushed onto a stack. When a function returns, its deferred calls are executed in last-in-first-out order.
+
+### Stacking Defers
+
+Multiple `defer` statements execute in LIFO (last-in-first-out) order:
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("Counting...")
+    
+    // These deferred statements will execute in reverse order
+    for i := 0; i < 5; i++ {
+        defer fmt.Println(i)
+    }
+    
+    fmt.Println("Done counting!")
+}
+```
+
+### Practical Use of Defer
+
+A common use of `defer` is to ensure resources are cleaned up properly, regardless of how a function exits.
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+)
+
+func main() {
+    // Open a file
+    f, err := os.Create("test.txt")
+    if err != nil {
+        fmt.Println("Error creating file:", err)
+        return
+    }
+    
+    // Schedule the file to be closed when main() exits
+    defer f.Close()
+    
+    // Write to the file
+    _, err = f.WriteString("Hello, Go!")
+    if err != nil {
+        fmt.Println("Error writing to file:", err)
+        return
+    }
+    
+    fmt.Println("File operations completed successfully")
+    // f.Close() will be called here, even if an error occurred above
+}
+```
+
+This is better than the common pattern in other languages, because it makes you rememeber that as soon as you create a resource
+that consumes memory, disk, etc you can clean it up immediately but scheduling it with defer. Therefore you won't leave dangling
+resources around that will introduce leaks.
+
+## Complete Flow Control Example
+
+Let's put everything together in a complete example that demonstrates various flow control structures:
+
+```go
+package main
+
+import (
+    "fmt"
+    "time"
+)
+
+func main() {
+    // Demonstrate defer stacking
+    defer fmt.Println("Program execution completed")
+    defer fmt.Println("===== End of Program =====")
+    
+    fmt.Println("===== Flow Control in Go =====")
+    
+    // For loop examples
+    fmt.Println("\n--- For Loop Examples ---")
+    
+    // Standard for loop
+    fmt.Println("Standard for loop:")
+    for i := 0; i < 3; i++ {
+        fmt.Printf("  Iteration %d\n", i)
+    }
+    
+    // While-style loop
+    fmt.Println("\nWhile-style loop:")
+    counter := 0
+    for counter < 3 {
+        fmt.Printf("  Counter: %d\n", counter)
+        counter++
+    }
+    
+    // Infinite loop with break
+    fmt.Println("\nInfinite loop with break:")
+    iterations := 0
+    for {
+        fmt.Printf("  Iteration %d\n", iterations)
+        iterations++
+        if iterations >= 3 {
+            break
+        }
+    }
+    
+    // For-range loop
+    fmt.Println("\nFor-range loop:")
+    cities := []string{"New York", "London", "Tokyo"}
+    for index, city := range cities {
+        fmt.Printf("  City %d: %s\n", index, city)
+    }
+    
+    // Conditional examples
+    fmt.Println("\n--- Conditional Examples ---")
+    
+    // If-else chain
+    fmt.Println("If-else example:")
+    temperature := 75
+    if temperature < 32 {
+        fmt.Println("  It's freezing!")
+    } else if temperature < 60 {
+        fmt.Println("  It's cool.")
+    } else if temperature < 90 {
+        fmt.Println("  It's warm.")
+    } else {
+        fmt.Println("  It's hot!")
+    }
+    
+    // Switch statement
+    fmt.Println("\nSwitch example:")
+    switch day := time.Now().Weekday().String(); day {
+    case "Saturday", "Sunday":
+        fmt.Println("  It's the weekend!")
+    case "Friday":
+        fmt.Println("  It's almost the weekend!")
+    default:
+        fmt.Println("  It's a weekday:", day)
+    }
+    
+    // Switch with no condition
+    fmt.Println("\nSwitch with no condition:")
+    hour := time.Now().Hour()
+    switch {
+    case hour < 12:
+        fmt.Println("  Good morning!")
+    case hour < 17:
+        fmt.Println("  Good afternoon!")
+    default:
+        fmt.Println("  Good evening!")
+    }
+    
+    // Defer example
+    fmt.Println("\n--- Defer Examples ---")
+    fmt.Println("Deferred function calls will execute after this")
+    
+    // The deferred prints will execute in reverse order (LIFO)
+    defer fmt.Println("  Deferred message 3")
+    defer fmt.Println("  Deferred message 2")
+    defer fmt.Println("  Deferred message 1")
+}
+```
+
+The above program demonstrates all the flow control structures we've covered in this chapter. Running it will show how each one works and in what order the deferred functions execute.
+
+## Summary
+
+In this chapter, we learned:
+
+- Different forms of the `for` loop (standard, while-style, infinite, and range loops)
+- How to use `if`, `else if`, and `else` statements for conditional execution
+- The `switch` statement for cleaner alternatives to long if-else chains
+- How to use `defer` to delay execution of a function until the surrounding function returns
+- How deferred calls are executed in last-in-first-out order
+
+These flow control structures are fundamental to writing effective Go programs and will be used extensively in the chapters that follow.

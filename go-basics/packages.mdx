@@ -1,3 +1,501 @@
 ---
 title: Packages and Imports
+description: "Learn how to organize your Go code with packages, import dependencies, understand exported names, and work with third-party libraries"
 ---
+
+Now that you understand the basic syntax, functions, and variables in Go, it's time to learn how to organize your code into packages and import functionality from other packages. This chapter will explore Go's package system, which is a fundamental aspect of writing maintainable and scalable Go applications.
+
+## Understanding Go Packages
+
+In Go, a package is a collection of source files in the same directory that are compiled together. Every Go source file belongs to a package, which is declared at the top of the file using the `package` keyword.
+
+### Package Conventions
+
+Here are some important conventions for Go packages:
+
+1. **Package Names**: Should be short, concise, and descriptive
+   - Use lowercase, single-word names
+   - Avoid underscores or mixedCaps
+   - The package name is often the same as the last element of the import path
+
+2. **Package Organization**: 
+   - One directory = one package (all files in a directory **must** have the same package name, otherwise the build will fail)
+   - Subdirectories = separate packages
+
+3. **Special Packages**:
+   - `main`: Indicates an executable program; must have a `main()` function
+   - `internal`: Contains code that can only be imported by its parent package or sibling packages
+
+Let's look at a simple example of a project structure:
+
+```
+myproject/
+├── main.go              // package main
+├── calculator/
+│   ├── basic.go         // package calculator
+│   └── advanced.go      // package calculator
+└── utils/
+    └── formatter.go     // package utils
+```
+
+## Creating and Using Local Packages
+
+Let's create a simple project with multiple packages to demonstrate how to organize and import local packages.
+
+### Project Setup
+
+First, let's initialize a new Go module:
+
+```bash
+mkdir mathapp
+cd mathapp
+go mod init mathapp
+```
+
+This creates a `go.mod` file that defines your module and its dependencies.
+
+### Creating Package Files
+
+Now, let's create the directory structure and files:
+
+1. First, create a `calculator` directory and add a file called `calculator.go`:
+
+```bash
+mkdir calculator
+```
+
+**File: calculator/calculator.go**
+```go
+// Package calculator provides mathematical calculation functions
+package calculator
+
+// Add returns the sum of two integers
+func Add(a, b int) int {
+    return a + b
+}
+
+// Subtract returns the difference between two integers
+func Subtract(a, b int) int {
+    return a - b
+}
+
+// multiply is an unexported function (private to the package)
+func multiply(a, b int) int {
+    return a * b
+}
+
+// Multiply uses the private multiply function but is exported
+func Multiply(a, b int) int {
+    return multiply(a, b) // Using private function
+}
+```
+
+2. Now, create the main application file:
+
+**File: main.go**
+```go
+package main
+
+import (
+    "fmt"
+    
+    // Import local package using module path
+    "mathapp/calculator"
+)
+
+func main() {
+    // Using exported functions from the calculator package
+    sum := calculator.Add(5, 3)
+    difference := calculator.Subtract(10, 4)
+    product := calculator.Multiply(6, 7)
+    
+    fmt.Println("Sum:", sum)
+    fmt.Println("Difference:", difference)
+    fmt.Println("Product:", product)
+    
+    // This would cause a compilation error:
+    // calculator.multiply(2, 3) // Cannot access unexported function
+}
+```
+
+### Building and Running
+
+You can build and run this multi-package program just like any other Go application:
+
+```bash
+go run main.go
+```
+
+Expected output:
+```
+Sum: 8
+Difference: 6
+Product: 42
+```
+
+## Exported Names and Visibility
+
+Go has a simple rule for determining what is accessible outside a package (exported) and what is not (unexported):
+
+- If a name (variable, type, function, etc.) starts with an **uppercase** letter, it's exported, meaning it's public and can be used by other packages
+- If a name starts with a **lowercase** letter, it's unexported (**private** to the package in which it's defined)
+
+<Note>
+This naming convention **replaces** the `public` and `private` keywords found in many other languages. 
+
+**There are no such keywords in Go.**
+</Note>
+
+### Examples of Exported and Unexported Names
+
+```go
+package example
+
+// Exported (public)
+var ExportedVariable = 42
+func ExportedFunction() {}
+type ExportedType struct {}
+
+// Unexported (private)
+var unexportedVariable = 21
+func unexportedFunction() {}
+type unexportedType struct {}
+```
+
+From outside the package, only the exported names are accessible:
+
+```go
+// In another package:
+import "mymodule/example"
+
+func main() {
+    // Works fine:
+    fmt.Println(example.ExportedVariable)
+    example.ExportedFunction()
+    var t example.ExportedType
+    
+    // Compilation errors - these names are not exported:
+    // fmt.Println(example.unexportedVariable)
+    // example.unexportedFunction()
+    // var t example.unexportedType
+}
+```
+
+## Using Third-Party Packages
+
+One of Go's strengths is its ecosystem of third-party packages. Let's look at how to use a popular package from GitHub.
+
+### Adding a Dependency
+
+For this example, we'll use a popular string manipulation library called `go-stringutil`:
+
+```bash
+go get github.com/golang/example/stringutil
+```
+
+This command:
+1. Downloads the package from GitHub
+2. Adds the dependency to your `go.mod` file
+
+### Using the Package
+
+Now let's update our `main.go` file to use this third-party package:
+
+**File: main.go**
+```go
+package main
+
+import (
+    "fmt"
+    
+    "mathapp/calculator"
+    
+    // Import third-party package
+    "github.com/golang/example/stringutil"
+)
+
+func main() {
+    // Using our local package
+    sum := calculator.Add(5, 3)
+    difference := calculator.Subtract(10, 4)
+    product := calculator.Multiply(6, 7)
+    
+    fmt.Println("Sum:", sum)
+    fmt.Println("Difference:", difference)
+    fmt.Println("Product:", product)
+    
+    // Using the third-party package
+    reversed := stringutil.Reverse("Hello, Go!")
+    fmt.Println("Reversed string:", reversed)
+}
+```
+
+### Running with Third-Party Dependencies
+
+Run the program as usual:
+
+```bash
+go run main.go
+```
+
+Expected output:
+```
+Sum: 8
+Difference: 6
+Product: 42
+Reversed string: !oG ,olleH
+```
+
+I'll revise the chapter to make the "Complete Example" section simpler by removing content that relies on structs and function receivers, which haven't been covered yet. Here's how I would modify that section:
+
+## Complete Example: A Multi-Package Application
+
+Let's create a simpler example with multiple packages that doesn't rely on structs or function receivers. We'll build a basic calculator application with separate packages for different types of operations:
+
+### Project Structure
+
+```
+calcsystem/
+├── go.mod
+├── main.go
+├── basic/
+│   └── basic.go
+├── advanced/
+│   └── advanced.go
+└── formatter/
+    └── formatter.go
+```
+
+### Implementation
+
+**File: go.mod**
+```
+module calcsystem
+
+go 1.21
+```
+
+**File: basic/basic.go**
+```go
+package basic
+
+// Add returns the sum of two integers
+func Add(a, b int) int {
+    return a + b
+}
+
+// Subtract returns the difference between two integers
+func Subtract(a, b int) int {
+    return a - b
+}
+
+// multiply is an unexported function (private to the package)
+func multiply(a, b int) int {
+    return a * b
+}
+
+// Multiply provides access to the unexported multiply function
+func Multiply(a, b int) int {
+    return multiply(a, b)
+}
+```
+
+**File: advanced/advanced.go**
+```go
+package advanced
+
+import "math"
+
+// Power returns a raised to the power of b
+func Power(a, b float64) float64 {
+    return math.Pow(a, b)
+}
+
+// SquareRoot returns the square root of a number
+func SquareRoot(a float64) float64 {
+    return math.Sqrt(a)
+}
+
+// isNegative is an unexported function that checks if a number is negative
+func isNegative(a float64) bool {
+    return a < 0
+}
+
+// AbsoluteValue returns the absolute value of a number
+func AbsoluteValue(a float64) float64 {
+    if isNegative(a) {
+        return -a
+    }
+    return a
+}
+```
+
+**File: formatter/formatter.go**
+```go
+package formatter
+
+import (
+    "fmt"
+    "strings"
+)
+
+// FormatResult formats a calculation result for display
+func FormatResult(operation string, result float64) string {
+    return fmt.Sprintf("Result of %s: %.2f", operation, result)
+}
+
+// FormatResults takes a list of result strings and formats them for display
+func FormatResults(results []string) string {
+    return strings.Join(results, "\n")
+}
+```
+
+**File: main.go**
+```go
+package main
+
+import (
+    "fmt"
+    
+    "calcsystem/basic"
+    "calcsystem/advanced"
+    "calcsystem/formatter"
+)
+
+func main() {
+    // Use the basic package
+    sum := basic.Add(5, 3)
+    difference := basic.Subtract(10, 4)
+    product := basic.Multiply(6, 7)
+    
+    // Use the advanced package
+    squared := advanced.Power(4, 2)
+    squareRoot := advanced.SquareRoot(16)
+    absValue := advanced.AbsoluteValue(-42)
+    
+    // Format and display results
+    fmt.Println("CALCULATOR RESULTS")
+    fmt.Println()
+    
+    // don't stress about not learning about string arrays yet,
+    // we will introduce them in a future chapter.
+    results := []string{
+        formatter.FormatResult("addition", float64(sum)),
+        formatter.FormatResult("subtraction", float64(difference)),
+        formatter.FormatResult("multiplication", float64(product)),
+        formatter.FormatResult("power", squared),
+        formatter.FormatResult("square root", squareRoot),
+        formatter.FormatResult("absolute value", absValue),
+    }
+    
+    fmt.Println(formatter.FormatResults(results))
+    
+    // Cannot access unexported names:
+    // isNeg := advanced.isNegative(-5)  // Error: unexported function
+    // mult := basic.multiply(3, 4)      // Error: unexported function
+}
+```
+
+### Building and Running
+
+To build and run this multi-package application:
+
+```bash
+go run main.go
+```
+
+Expected output:
+```
+CALCULATOR RESULTS
+
+Result of addition: 8.00
+Result of subtraction: 6.00
+Result of multiplication: 42.00
+Result of power: 16.00
+Result of square root: 4.00
+Result of absolute value: 42.00
+```
+
+This example demonstrates:
+- Creating and organizing multiple packages
+- Using exported and unexported functions
+- Importing local packages
+- Structuring a more complex application
+
+All this is accomplished without using structs or function receivers, making it more appropriate for this stage of learning Go.
+
+## Working with Artifactory for Go Packages
+
+For our on prem environment, you will need to work with private package repositories like JFrog Artifactory.
+This allows us to host and manage our own Go modules securely.
+
+### Configuring Go to Use Artifactory
+
+To use Artifactory as a Go proxy, you need to configure the `GOPROXY` environment variable:
+
+```bash
+# Replace with your actual Artifactory URL
+export GOPROXY=https://artifactory.example.com/artifactory/api/go/go-virtual
+```
+
+You can add this to your shell profile (`.bashrc`, `.zshrc`, etc.) to make it permanent.
+
+### Publishing a Go Module to Artifactory
+
+<Warning>
+This section requires revision (TBD)
+</Warning>
+
+To publish your Go module to Artifactory:
+
+1. Make sure your module is properly tagged with a version:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+2. Build and test your module:
+
+```bash
+go build ./...
+# this runs unit tests (like pytest)
+# we will learn about testing in a future chapter
+go test ./...
+```
+
+3. Push the module to Artifactory (assuming your module is already in a Git repository):
+
+```bash
+# First, configure Git for the Artifactory provider
+git config --global url."https://your-username:your-api-key@artifactory.example.com/artifactory/api/go/go-virtual".insteadOf "https://artifactory.example.com/artifactory/api/go/go-virtual"
+
+# Then push the module
+GOPROXY=https://artifactory.example.com/artifactory/api/go/go-virtual go list -m yourmodule@v1.0.0
+```
+
+### Consuming a Module from Artifactory
+
+Once your module is published to Artifactory, others in your organization can consume it by setting their `GOPROXY` environment variable and then using `go get`:
+
+```bash
+export GOPROXY=https://artifactory.example.com/artifactory/api/go/go-virtual
+go get yourmodule@v1.0.0
+```
+
+The module will be downloaded from Artifactory rather than the public Go module proxy.
+
+## Summary
+
+In this chapter, we've covered:
+
+- How packages work in Go and the naming conventions
+- Creating and organizing your code into multiple packages
+- Exported versus unexported names (public vs private)
+- Importing and using local packages
+- Adding and using third-party packages from GitHub
+- Working with private package repositories in Artifactory
+
+Understanding packages is crucial for building well-structured Go applications. With this knowledge, you can now organize your code more effectively and leverage the rich ecosystem of Go packages available.
+
+In the next chapter, we'll explore flow control in Go, including if statements, loops, and switches.

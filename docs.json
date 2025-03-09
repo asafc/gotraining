@@ -20,9 +20,9 @@
               "go-basics/functions",
               "go-basics/packages",
               "go-basics/flow-control",
-              "go-basics/testing",
               "go-basics/advanced-types",
-              "go-basics/methods"
+              "go-basics/methods",
+              "go-basics/testing"
             ]
           },
           {

@@ -2,3 +2,562 @@
 title: Methods and interfaces
 description: Go's flavour of Object Oriented Programming
 ---
+
+This chapter will cover best practices on how to implement object oriented programming and polymorphism in Go using **interfaces** and **methods**, as well as best practices for error handling.
+
+## Methods (Receivers)
+
+In Go, a method is a function that's associated with a particular type. This provides a way to define behavior for your custom types, similar to class methods in object-oriented languages.
+
+### What Are Receivers?
+
+A receiver is a special parameter that appears between the `func` keyword and the method name. It binds the method to a specific type.
+
+```go
+type Circle struct {
+    radius float64
+}
+
+// Method with receiver: binds the .Area() method to all variables of type `Circle`
+func (c Circle) Area() float64 {
+    return 3.14 * c.radius * c.radius
+}
+```
+
+To call a method:
+
+```go
+circle := Circle{radius: 5}
+area := circle.Area() // Method call
+```
+
+### Methods vs Functions
+
+Methods and functions can accomplish the same tasks. The difference is primarily in syntax and organization.
+
+Here's the same functionality implemented as both a method and a function:
+
+```go
+// As a method
+func (c Circle) Area() float64 {
+    return 3.14 * c.radius * c.radius
+}
+
+// As a regular function
+func CircleArea(c Circle) float64 {
+    return 3.14 * c.radius * c.radius
+}
+```
+
+Method call:
+```go
+area := circle.Area()
+```
+
+Function call:
+```go
+area := CircleArea(circle)
+```
+
+Methods help organize code by attaching behaviors directly to types, making your code more readable and maintainable.
+
+<Note>
+You can think of structs as resembling classes in python, and methods as member functions of these classes.
+</Note>
+
+## Pointer Receivers
+
+By default, Go passes arguments to functions and methods by value (creating a copy). If you want to modify the receiver within a method, you need to use a pointer receiver.
+
+```go
+// Value receiver - cannot modify the Circle
+func (c Circle) SetRadius(r float64) {
+    c.radius = r // This only modifies the copy
+}
+
+// Pointer receiver - can modify the Circle
+func (c *Circle) SetRadiusPtr(r float64) {
+    c.radius = r // This modifies the original Circle
+}
+```
+
+Let's see how these behave:
+
+```go
+circle := Circle{radius: 5}
+circle.SetRadius(10)
+fmt.Println(circle.radius) // Still 5
+
+circle.SetRadiusPtr(10)
+fmt.Println(circle.radius) // Now 10
+```
+
+### An Important Distinction
+
+With functions, you must pass the correct type (value or pointer):
+
+```go
+func UpdateRadius(c Circle, r float64) {
+    c.radius = r // Only modifies the copy
+}
+
+func UpdateRadiusPtr(c *Circle, r float64) {
+    c.radius = r // Modifies the original
+}
+
+circle := Circle{radius: 5}
+UpdateRadius(circle) // Works
+UpdateRadiusPtr(circle) // Compile error - requires a pointer
+
+UpdateRadius(&circle) // Compile error - requires a value
+UpdateRadiusPtr(&circle) // Works
+```
+
+With methods, Go is more flexible:
+
+```go
+circle := Circle{radius: 5}
+circle.SetRadius(10)      // Works with value receiver
+circle.SetRadiusPtr(10)   // Works! Go automatically passes &circle
+
+circlePtr := &Circle{radius: 5}
+circlePtr.SetRadius(10)   // Works! Go automatically dereferences
+circlePtr.SetRadiusPtr(10) // Works with pointer receiver
+```
+
+This convenience makes your code cleaner and more flexible.
+
+## Interfaces
+
+In Go, interfaces define behavior by declaring a set of method signatures. Any type that implements all methods of an interface automatically satisfies that interface (no explicit declaration needed).
+
+### Basic Interface Example
+
+```go
+// Define an interface
+type Shape interface {
+    Area() float64
+    Perimeter() float64
+}
+```
+
+Any type with both `Area()` and `Perimeter()` methods automatically implements the `Shape` interface.
+
+```go
+// Circle implements Shape interface
+type Circle struct {
+    radius float64
+}
+
+func (c Circle) Area() float64 {
+    return 3.14 * c.radius * c.radius
+}
+
+func (c Circle) Perimeter() float64 {
+    return 2 * 3.14 * c.radius
+}
+
+// Rectangle implements Shape interface
+type Rectangle struct {
+    width, height float64
+}
+
+func (r Rectangle) Area() float64 {
+    return r.width * r.height
+}
+
+func (r Rectangle) Perimeter() float64 {
+    return 2 * (r.width + r.height)
+}
+```
+
+Now we can write functions that accept any Shape:
+
+```go
+func PrintShapeInfo(s Shape) {
+    fmt.Printf("Area: %f, Perimeter: %f\n", s.Area(), s.Perimeter())
+}
+
+// We can pass any type that implements Shape
+circle := Circle{radius: 5}
+rectangle := Rectangle{width: 4, height: 3}
+
+PrintShapeInfo(circle)
+PrintShapeInfo(rectangle)
+```
+
+### Comparison to Python Abstract Classes
+
+This is similar to abstract base classes in Python, but with two key differences:
+
+1. In Go, implementation is implicit. If a type has the required methods, it implements the interface.
+2. In Python, you explicitly inherit from an abstract class; in Go, there's no inheritance.
+
+Python equivalent:
+```python
+from abc import ABC, abstractmethod
+
+class Shape(ABC):
+    @abstractmethod
+    def area(self):
+        pass
+    
+    @abstractmethod
+    def perimeter(self):
+        pass
+
+class Circle(Shape):  # Explicit inheritance
+    def __init__(self, radius):
+        self.radius = radius
+    
+    def area(self):
+        return 3.14 * self.radius * self.radius
+    
+    def perimeter(self):
+        return 2 * 3.14 * self.radius
+```
+
+### Empty Interfaces
+
+The empty interface `interface{}` (or just `any` in Go 1.18+) has no methods, so every type satisfies it. It's useful when you need to accept any type.
+
+```go
+func PrintAny(a interface{}) {
+    fmt.Println(a)
+}
+
+PrintAny(42)
+PrintAny("hello")
+PrintAny(Circle{radius: 5})
+```
+
+Be careful with empty interfaces as they bypass Go's type safety.
+
+## Best Practices for Interfaces
+
+1. **Keep interfaces small**: Define interfaces with as few methods as possible
+2. **Define interfaces where they're used**: Define interfaces in the package that uses them, not where they're implemented
+3. **Accept interfaces, return structs**: Functions should accept interfaces and return concrete types
+
+Example of good interface design:
+
+```go
+// In a package that needs to read data
+type Reader interface {
+    Read(p []byte) (n int, err error)
+}
+
+func ProcessData(r Reader) {
+    // Can work with any type that implements Read
+    data := make([]byte, 100)
+    n, _ := r.Read(data)
+    // Process data
+}
+```
+
+## Type Assertions and Type Switches
+
+When working with interfaces, you sometimes need to access the underlying concrete type.
+
+### Type Assertions
+
+Type assertions extract the concrete type from an interface value:
+
+```go
+var s Shape = Circle{radius: 5}
+
+// Type assertion to get the underlying Circle
+c, ok := s.(Circle)
+if ok {
+    fmt.Println("This is a circle with radius:", c.radius)
+} else {
+    fmt.Println("This is not a circle")
+}
+```
+
+Without the second return value, a failed assertion will panic:
+
+```go
+c := s.(Circle) // Panics if s is not a Circle
+```
+
+### Type Switches
+
+Type switches provide a clean way to handle multiple possible types:
+
+```go
+func DescribeShape(s Shape) {
+    switch v := s.(type) {
+    case Circle:
+        fmt.Printf("Circle with radius %f\n", v.radius)
+    case Rectangle:
+        fmt.Printf("Rectangle with width %f and height %f\n", v.width, v.height)
+    default:
+        fmt.Println("Unknown shape")
+    }
+}
+```
+
+## Error Handling in Go
+
+Go uses a simple interface for errors rather than exceptions:
+
+```go
+type error interface {
+    Error() string
+}
+```
+
+### Creating and Handling Errors
+
+```go
+import "errors"
+
+func Divide(a, b float64) (float64, error) {
+    if b == 0 {
+        return 0, errors.New("division by zero")
+    }
+    return a / b, nil
+}
+```
+
+Error handling pattern:
+
+```go
+result, err := Divide(10, 0)
+if err != nil {
+    fmt.Println("Error:", err)
+    return // or handle the error
+}
+// Continue with result
+fmt.Println("Result:", result)
+```
+
+### Custom Error Types
+
+You can create custom error types:
+
+```go
+type DivisionError struct {
+    Dividend float64
+    Divisor  float64
+}
+
+func (e *DivisionError) Error() string {
+    return fmt.Sprintf("cannot divide %f by %f", e.Dividend, e.Divisor)
+}
+
+func SafeDivide(a, b float64) (float64, error) {
+    if b == 0 {
+        return 0, &DivisionError{Dividend: a, Divisor: b}
+    }
+    return a / b, nil
+}
+```
+
+### Error Handling Best Practices
+
+1. **Check errors immediately**: Handle errors as soon as they're returned
+2. **Don't ignore errors**: At minimum, log them
+3. **Return errors**: Don't use panic for normal error flows
+4. **Provide context**: Wrap errors with additional information
+5. **Use sentinel errors for comparison**: Define package-level errors for specific conditions
+
+```go
+var ErrDivisionByZero = errors.New("division by zero")
+
+func Divide(a, b float64) (float64, error) {
+    if b == 0 {
+        return 0, ErrDivisionByZero
+    }
+    return a / b, nil
+}
+
+// Later
+if err == ErrDivisionByZero {
+    // Handle specific error
+}
+```
+
+## Complete Working Example
+
+```go
+package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+// Define shapes
+type Shape interface {
+	Area() float64
+	Perimeter() float64
+}
+
+// Circle implements Shape
+type Circle struct {
+	radius float64
+}
+
+func (c Circle) Area() float64 {
+	return 3.14 * c.radius * c.radius
+}
+
+func (c Circle) Perimeter() float64 {
+	return 2 * 3.14 * c.radius
+}
+
+// Value receiver - won't modify the original Circle
+func (c Circle) SetRadius(r float64) {
+	c.radius = r // Only modifies the copy
+}
+
+// Pointer receiver - will modify the original Circle
+func (c *Circle) SetRadiusPtr(r float64) {
+	c.radius = r // Modifies the original
+}
+
+// Rectangle implements Shape
+type Rectangle struct {
+	width, height float64
+}
+
+func (r Rectangle) Area() float64 {
+	return r.width * r.height
+}
+
+func (r Rectangle) Perimeter() float64 {
+	return 2 * (r.width + r.height)
+}
+
+// Same functionality as a regular function
+func CircleArea(c Circle) float64 {
+	return 3.14 * c.radius * c.radius
+}
+
+// Custom error type
+type DivisionError struct {
+	Dividend float64
+	Divisor  float64
+}
+
+func (e *DivisionError) Error() string {
+	return fmt.Sprintf("cannot divide %f by %f", e.Dividend, e.Divisor)
+}
+
+// Regular error
+var ErrDivisionByZero = errors.New("division by zero")
+
+func Divide(a, b float64) (float64, error) {
+	if b == 0 {
+		return 0, ErrDivisionByZero
+	}
+	return a / b, nil
+}
+
+// Function with custom error
+func SafeDivide(a, b float64) (float64, error) {
+	if b == 0 {
+		return 0, &DivisionError{Dividend: a, Divisor: b}
+	}
+	return a / b, nil
+}
+
+// Function that works with any Shape
+func PrintShapeInfo(s Shape) {
+	fmt.Printf("Area: %.2f, Perimeter: %.2f\n", s.Area(), s.Perimeter())
+	
+	// Type switch example
+	switch v := s.(type) {
+	case Circle:
+		fmt.Printf("Circle with radius %.2f\n", v.radius)
+	case Rectangle:
+		fmt.Printf("Rectangle with width %.2f and height %.2f\n", v.width, v.height)
+	default:
+		fmt.Println("Unknown shape")
+	}
+}
+
+// Function accepting empty interface
+func PrintAny(a interface{}) {
+	fmt.Printf("Value: %v (Type: %T)\n", a, a)
+}
+
+func main() {
+	// Methods demonstration
+	circle := Circle{radius: 5}
+	fmt.Println("Initial circle radius:", circle.radius)
+	
+	// Value receiver doesn't modify
+	circle.SetRadius(10)
+	fmt.Println("After SetRadius:", circle.radius) // Still 5
+	
+	// Pointer receiver modifies
+	circle.SetRadiusPtr(10)
+	fmt.Println("After SetRadiusPtr:", circle.radius) // Now 10
+	
+	// Method vs function
+	fmt.Printf("Circle area (method): %.2f\n", circle.Area())
+	fmt.Printf("Circle area (function): %.2f\n", CircleArea(circle))
+	
+	// Interfaces
+	rectangle := Rectangle{width: 4, height: 3}
+	
+	// Both Circle and Rectangle implement Shape
+	PrintShapeInfo(circle)
+	PrintShapeInfo(rectangle)
+	
+	// Type assertion
+	var s Shape = Circle{radius: 7}
+	c, ok := s.(Circle)
+	if ok {
+		fmt.Println("Successfully converted to Circle with radius:", c.radius)
+	}
+	
+	// Empty interface
+	PrintAny(42)
+	PrintAny("hello")
+	PrintAny(circle)
+	
+	// Error handling
+	result, err := Divide(10, 2)
+	if err != nil {
+		fmt.Println("Error:", err)
+	} else {
+		fmt.Println("10 ÷ 2 =", result)
+	}
+	
+	result, err = Divide(10, 0)
+	if err != nil {
+		fmt.Println("Error:", err)
+		
+		// Check for specific error
+		if err == ErrDivisionByZero {
+			fmt.Println("Detected division by zero!")
+		}
+	}
+	
+	// Custom error
+	result, err = SafeDivide(10, 0)
+	if err != nil {
+		fmt.Println("Error:", err)
+		
+		// Type assertion with error
+		if divErr, ok := err.(*DivisionError); ok {
+			fmt.Printf("Attempted to divide %f by %f\n", 
+				divErr.Dividend, divErr.Divisor)
+		}
+	}
+}
+
+```
+
+This example demonstrates all the concepts we've covered:
+- Methods with value and pointer receivers
+- The difference between methods and functions
+- Interfaces and implementation
+- Type assertions and type switches
+- Error handling with both standard and custom errors
+
+The code is ready to compile and run, and includes comments to highlight important concepts.

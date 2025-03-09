@@ -1,3 +1,391 @@
 ---
-title: Testing
+title: Testing in Go
 ---
+
+In this chapter, we'll explore Go's built-in testing framework. You'll learn how to write basic unit tests, understand file naming conventions, and discover how to run tests using the Go command-line interface.
+
+## Introduction to Testing in Go
+
+Go provides a simple yet powerful testing framework in its standard library through the `testing` package. Writing tests in Go requires no external libraries or frameworks, making it straightforward to get started.
+
+## File Naming Conventions
+
+Go has strict conventions for test files:
+
+1. Test files must end with `_test.go`
+2. Test files should be in the same package as the code being tested
+3. Test functions must start with the word `Test` followed by a name that begins with a capital letter
+
+For example, if you have a file named `math.go`, your test file would be named `math_test.go`.
+
+## Writing Basic Tests
+
+Let's start with a simple function that we want to test. Create a file named `math.go`:
+
+```go
+package math
+
+// Add returns the sum of two integers
+func Add(a, b int) int {
+    return a + b
+}
+```
+
+Now, let's write a test for this function in `math_test.go`:
+
+```go
+package math
+
+import "testing"
+
+func TestAdd(t *testing.T) {
+    // Define test cases
+    result := Add(2, 3)
+    expected := 5
+    
+    // Check if the result matches what we expect
+    if result != expected {
+        t.Errorf("Add(2, 3) = %d; expected %d", result, expected)
+    }
+}
+```
+
+Key points about this test:
+
+1. The test is in the same package as the code it's testing
+2. It imports the `testing` package
+3. The test function name starts with `Test` followed by a capitalized name
+4. The test takes a single parameter of type `*testing.T`
+5. We use `t.Errorf()` to report test failures
+
+## Running Tests
+
+To run the tests, use the `go test` command in your terminal:
+
+```bash
+$ go test
+```
+
+This command will look for all files ending with `_test.go` in the current directory and run any functions that match the testing pattern.
+
+If you want more verbose output, you can use the `-v` flag:
+
+```bash
+$ go test -v
+```
+
+With verbose output, you'll see the name of each test that runs and how long it took:
+
+```
+=== RUN   TestAdd
+--- PASS: TestAdd (0.00s)
+PASS
+ok      example/math   0.001s
+```
+
+To run a specific test, you can use the `-run` flag followed by a regular expression that matches the test name:
+
+```bash
+$ go test -run TestAdd
+```
+
+## Table-Driven Tests
+
+A common pattern in Go is to use "table-driven tests" where multiple test cases are defined in a single test function:
+
+```go
+package math
+
+import "testing"
+
+func TestAdd(t *testing.T) {
+    // Define a table of test cases
+    testCases := []struct {
+        a, b     int
+        expected int
+    }{
+        {2, 3, 5},
+        {-1, 1, 0},
+        {0, 0, 0},
+        {-5, -5, -10},
+    }
+    
+    // Run all the test cases
+    for _, tc := range testCases {
+        result := Add(tc.a, tc.b)
+        if result != tc.expected {
+            t.Errorf("Add(%d, %d) = %d; expected %d", 
+                     tc.a, tc.b, result, tc.expected)
+        }
+    }
+}
+```
+
+This approach makes it easy to add new test cases without duplicating code.
+
+## Testing Multiple Functions
+
+Let's add another function to our `math.go` file:
+
+```go
+package math
+
+// Add returns the sum of two integers
+func Add(a, b int) int {
+    return a + b
+}
+
+// Multiply returns the product of two integers
+func Multiply(a, b int) int {
+    return a * b
+}
+```
+
+Now we can add tests for the `Multiply` function in our test file:
+
+```go
+package math
+
+import "testing"
+
+func TestAdd(t *testing.T) {
+    // Test cases for Add function
+    testCases := []struct {
+        a, b     int
+        expected int
+    }{
+        {2, 3, 5},
+        {-1, 1, 0},
+        {0, 0, 0},
+    }
+    
+    for _, tc := range testCases {
+        result := Add(tc.a, tc.b)
+        if result != tc.expected {
+            t.Errorf("Add(%d, %d) = %d; expected %d", 
+                     tc.a, tc.b, result, tc.expected)
+        }
+    }
+}
+
+func TestMultiply(t *testing.T) {
+    // Test cases for Multiply function
+    testCases := []struct {
+        a, b     int
+        expected int
+    }{
+        {2, 3, 6},
+        {-1, 1, -1},
+        {0, 5, 0},
+    }
+    
+    for _, tc := range testCases {
+        result := Multiply(tc.a, tc.b)
+        if result != tc.expected {
+            t.Errorf("Multiply(%d, %d) = %d; expected %d", 
+                     tc.a, tc.b, result, tc.expected)
+        }
+    }
+}
+```
+
+## Subtests
+
+Go 1.7 introduced the ability to create subtests, which allows for better organization and more granular test execution:
+
+```go
+package math
+
+import "testing"
+
+func TestMathOperations(t *testing.T) {
+    // Test cases for Add function
+    t.Run("Addition", func(t *testing.T) {
+        result := Add(2, 3)
+        expected := 5
+        if result != expected {
+            t.Errorf("Add(2, 3) = %d; expected %d", result, expected)
+        }
+    })
+    
+    // Test cases for Multiply function
+    t.Run("Multiplication", func(t *testing.T) {
+        result := Multiply(2, 3)
+        expected := 6
+        if result != expected {
+            t.Errorf("Multiply(2, 3) = %d; expected %d", result, expected)
+        }
+    })
+}
+```
+
+You can run specific subtests using the `-run` flag:
+
+```bash
+$ go test -run TestMathOperations/Addition
+```
+
+## Test Setup and Teardown
+
+Sometimes you need to perform setup before your tests run and cleanup afterward. In Go, you can use `t.Cleanup()` for teardown operations:
+
+```go
+package math
+
+import (
+    "testing"
+    "fmt"
+    "os"
+)
+
+func TestWithSetupAndTeardown(t *testing.T) {
+    // Setup - e.g., create a temporary file
+    f, err := os.Create("temp.txt")
+    if err != nil {
+        t.Fatal("Failed to create temp file:", err)
+    }
+    
+    // Register cleanup function to run when test completes
+    t.Cleanup(func() {
+        f.Close()
+        os.Remove("temp.txt")
+        fmt.Println("Cleanup: Temporary file removed")
+    })
+    
+    // Run the actual test
+    // ...
+}
+```
+
+## Complete Testing Example
+
+Let's put everything together with a more realistic example. We'll create a simple `calculator` package:
+
+File: `calculator.go`
+```go
+package calculator
+
+// Calculator represents a simple calculator
+type Calculator struct {
+    memory int
+}
+
+// New creates a new Calculator
+func New() *Calculator {
+    return &Calculator{
+        memory: 0,
+    }
+}
+
+// Add adds a value to the calculator and returns the result
+func (c *Calculator) Add(value int) int {
+    c.memory += value
+    return c.memory
+}
+
+// Subtract subtracts a value from the calculator and returns the result
+func (c *Calculator) Subtract(value int) int {
+    c.memory -= value
+    return c.memory
+}
+
+// GetMemory returns the current value in memory
+func (c *Calculator) GetMemory() int {
+    return c.memory
+}
+
+// Clear resets the calculator's memory to zero
+func (c *Calculator) Clear() {
+    c.memory = 0
+}
+```
+
+File: `calculator_test.go`
+```go
+package calculator
+
+import "testing"
+
+func TestCalculator(t *testing.T) {
+    t.Run("New Calculator", func(t *testing.T) {
+        calc := New()
+        if calc.GetMemory() != 0 {
+            t.Errorf("New calculator should have memory=0, got %d", calc.GetMemory())
+        }
+    })
+    
+    t.Run("Addition", func(t *testing.T) {
+        calc := New()
+        
+        testCases := []struct {
+            input    int
+            expected int
+        }{
+            {5, 5},      // 0 + 5 = 5
+            {3, 8},      // 5 + 3 = 8
+            {-10, -2},   // 8 + (-10) = -2
+        }
+        
+        for _, tc := range testCases {
+            result := calc.Add(tc.input)
+            if result != tc.expected {
+                t.Errorf("After adding %d, expected %d, got %d", 
+                         tc.input, tc.expected, result)
+            }
+        }
+    })
+    
+    t.Run("Subtraction", func(t *testing.T) {
+        calc := New()
+        calc.Add(10) // Start with 10 in memory
+        
+        testCases := []struct {
+            input    int
+            expected int
+        }{
+            {5, 5},     // 10 - 5 = 5
+            {8, -3},    // 5 - 8 = -3
+            {-5, 2},    // -3 - (-5) = 2
+        }
+        
+        for _, tc := range testCases {
+            result := calc.Subtract(tc.input)
+            if result != tc.expected {
+                t.Errorf("After subtracting %d, expected %d, got %d", 
+                         tc.input, tc.expected, result)
+            }
+        }
+    })
+    
+    t.Run("Clear", func(t *testing.T) {
+        calc := New()
+        calc.Add(10)
+        calc.Clear()
+        
+        if calc.GetMemory() != 0 {
+            t.Errorf("After Clear(), expected memory=0, got %d", calc.GetMemory())
+        }
+    })
+}
+```
+
+To run these tests:
+
+```bash
+$ go test -v
+```
+
+## Summary
+
+In this chapter, we've covered:
+
+- Go's built-in testing framework
+- File naming conventions for test files (`_test.go`)
+- Writing basic unit tests
+- Running tests with the `go test` command
+- Table-driven tests for testing multiple scenarios
+- Using subtests for better organization
+- Test setup and teardown
+- A complete testing example
+
+The built-in testing package in Go is simple yet powerful enough for most testing needs. As you progress, you may find additional testing libraries useful for more complex scenarios, but the standard library's `testing` package provides a solid foundation for unit testing.
